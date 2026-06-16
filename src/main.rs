@@ -1,6 +1,7 @@
 mod config;
 mod config_file;
 mod daemon;
+mod extractor;
 mod graph;
 mod indexer;
 mod lsp;
@@ -42,11 +43,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init { root } => {
             let root = resolve_root(root)?;
-            let root_uri = format!("file://{}", root.display());
-            let cfg = config_file::load(&root).unwrap_or_default();
-            let mut pool = lsp::pool::LspPool::new(&root_uri).with_overrides(cfg.lsp.overrides.clone());
-            let mut indexer = indexer::Indexer::new(&root);
-            indexer.full_index(&mut pool)?;
+            let indexer = indexer::Indexer::new(&root);
+            indexer.full_index()?;
             println!("Index written to {}/.codeindex/", root.display());
         }
         Commands::Serve { root } => {

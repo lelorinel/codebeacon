@@ -1,5 +1,4 @@
 use codebeacon::indexer::Indexer;
-use codebeacon::lsp::pool::LspPool;
 use std::path::Path;
 
 fn fixture_root() -> &'static Path {
@@ -9,11 +8,9 @@ fn fixture_root() -> &'static Path {
 #[test]
 fn full_index_creates_codeindex_dir() {
     let root = fixture_root();
-    let root_uri = format!("file://{}", root.display());
-    let mut pool = LspPool::new(&root_uri);
-    let mut indexer = Indexer::new(root);
+    let indexer = Indexer::new(root);
 
-    let _ = indexer.full_index(&mut pool);
+    let _ = indexer.full_index();
 
     let codeindex = root.join(".codeindex");
     assert!(codeindex.exists(), ".codeindex dir should be created");
@@ -25,10 +22,8 @@ fn index_json_contains_packages() {
     let root = fixture_root();
     let codeindex = root.join(".codeindex");
     if !codeindex.join("index.json").exists() {
-        let root_uri = format!("file://{}", root.display());
-        let mut pool = LspPool::new(&root_uri);
-        let mut indexer = Indexer::new(root);
-        let _ = indexer.full_index(&mut pool);
+        let indexer = Indexer::new(root);
+        let _ = indexer.full_index();
     }
 
     let text = std::fs::read_to_string(codeindex.join("index.json")).unwrap();
