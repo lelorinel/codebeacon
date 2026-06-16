@@ -12,7 +12,8 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
     tracing::info!("Starting codebeacon daemon for {}", repo_root.display());
 
     let root_uri = format!("file://{}", repo_root.display());
-    let mut pool = LspPool::new(&root_uri);
+    let config = crate::config_file::load(&repo_root).unwrap_or_default();
+    let mut pool = LspPool::new(&root_uri).with_overrides(config.lsp.overrides.clone());
     let mut indexer = Indexer::new(&repo_root);
 
     // Re-index files changed while the daemon was offline
@@ -53,6 +54,8 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
 
         if let Err(e) = indexer.rebuild_index_from_map(&entry_map) {
             tracing::warn!("Index error: {e}");
+        } else if let Err(e) = indexer.save_graph() {
+            tracing::warn!("Graph save error: {e}");
         }
     }
 
