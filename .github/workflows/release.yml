@@ -410,13 +410,13 @@ jobs:
         run: |
           for pkg in npm/codebeacon-linux-x64 npm/codebeacon-linux-arm64 npm/codebeacon-win32-x64 npm/codebeacon-darwin-x64 npm/codebeacon-darwin-arm64; do
             if [ -d "$pkg" ]; then
-              npm publish "$pkg" --access public --no-git-checks || echo "Already published or failed: $pkg"
+              npm publish "./$pkg" --access public --no-git-checks || echo "Already published or failed: $pkg"
             fi
           done
       - name: Publish umbrella package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish npm/codebeacon --access public --no-git-checks
+        run: npm publish ./npm/codebeacon --access public --no-git-checks
 
   announce:
     needs:
