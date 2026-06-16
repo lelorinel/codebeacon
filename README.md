@@ -28,23 +28,7 @@ Existing tools have real gaps:
 
 ## How It Works
 
-```
-┌─────────────────────────────────────────────┐
-│                  DAEMON                      │
-│                                             │
-│  ┌──────────┐    ┌──────────┐              │
-│  │ FSWatcher │───▶│ LSP Pool │              │
-│  └──────────┘    └────┬─────┘              │
-│                       │                     │
-│                  ┌────▼──────┐             │
-│                  │  Indexer  │             │
-│                  └────┬──────┘             │
-│                       │                     │
-│          ┌────────────┼────────────┐        │
-│          ▼            ▼            ▼        │
-│    .codeindex/   Graph Engine   MCP Server  │
-└─────────────────────────────────────────────┘
-```
+![Architecture](docs/images/architecture.png)
 
 1. **FSWatcher** detects file changes with 100ms debounce
 2. **LSP Pool** fetches symbols via system-installed LSP binaries (rust-analyzer, gopls, pylsp, etc.)
