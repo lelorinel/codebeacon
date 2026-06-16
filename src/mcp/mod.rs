@@ -1,6 +1,7 @@
 pub mod protocol;
 pub mod tools;
 
+use crate::lsp::client::path_to_uri;
 use crate::lsp::pool::LspPool;
 use crate::mcp::protocol::{tool_list, McpRequest, McpResponse};
 use crate::mcp::tools::{dispatch, ToolContext};
@@ -38,7 +39,7 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
 }
 
 pub fn run_stdio_server(repo_root: PathBuf) -> Result<()> {
-    let root_uri = format!("file://{}", repo_root.display());
+    let root_uri = path_to_uri(&repo_root);
     let ctx = ToolContext {
         repo_root,
         lsp_pool: Mutex::new(LspPool::new(&root_uri)),
