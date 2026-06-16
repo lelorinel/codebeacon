@@ -404,11 +404,13 @@ jobs:
           echo "=== Verifying package.json ==="
           cat npm/codebeacon/package.json
           printf '%s\n' '#!/usr/bin/env node' '"use strict";' \
-            'const {execFileSync}=require("child_process");' \
+            'const{execFileSync,chmodSync}=require("child_process");' \
+            'const{constants}=require("fs");' \
             'const p=process.platform,a=process.arch;' \
             'const m={"linux-x64":"codebeacon-linux-x64","linux-arm64":"codebeacon-linux-arm64","darwin-x64":"codebeacon-darwin-x64","darwin-arm64":"codebeacon-darwin-arm64","win32-x64":"codebeacon-win32-x64"};' \
             'const pkg=m[p+"-"+a];if(!pkg){console.error("Unsupported platform:",p,a);process.exit(1);}' \
             'const bin=require.resolve(pkg+"/codebeacon"+(p==="win32"?".exe":""));' \
+            'try{chmodSync(bin,constants.S_IRWXU|constants.S_IRGRP|constants.S_IXGRP|constants.S_IROTH|constants.S_IXOTH);}catch(e){}' \
             'execFileSync(bin,process.argv.slice(2),{stdio:"inherit"});' > npm/codebeacon/bin/codebeacon
           chmod +x npm/codebeacon/bin/codebeacon
           cp README.md npm/codebeacon/README.md
