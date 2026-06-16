@@ -177,8 +177,10 @@ impl Indexer {
             .and_then(|m| m.modified())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
-        let stale: Vec<PathBuf> = self.collect_source_files()?
-            .into_iter()
+        use rayon::prelude::*;
+        let all_files = self.collect_source_files()?;
+        let stale: Vec<PathBuf> = all_files
+            .into_par_iter()
             .filter(|p| {
                 std::fs::metadata(p)
                     .and_then(|m| m.modified())
@@ -209,20 +211,43 @@ impl Indexer {
     pub fn full_index(&mut self, pool: &mut LspPool) -> Result<()> {
         let files = self.collect_source_files()?;
         tracing::info!("Indexing {} files", files.len());
+        tracing::info!(
+            "LSP concurrency: {} (single-client-per-language mode)",
+            self.config.lsp_concurrency
+        );
 
-        let mut all_entries: Vec<FileEntry> = Vec::with_capacity(files.len());
-        for file in &files {
-            let symbols = self.extract_symbols(file, pool);
-            let rel = file.strip_prefix(&self.repo_root).unwrap_or(file);
-            all_entries.push(FileEntry {
-                path: rel.to_path_buf(),
-                symbols,
-                depends_on: vec![],
-                depended_by: vec![],
-            });
-            // Log progress every 100 files
-            if all_entries.len() % 100 == 0 {
-                tracing::debug!("Indexed {}/{} files", all_entries.len(), files.len());
+        // Group files by language key for cache-friendly LSP client reuse.
+        // All files of one language are processed consecutively so the LSP
+        // client stays warm between requests (no cold-restart between files).
+        let mut by_lang: HashMap<Option<String>, Vec<PathBuf>> = HashMap::new();
+        for file in files {
+            let lang_key = detect_language(&file).map(|l| l.language_id().to_owned());
+            by_lang.entry(lang_key).or_default().push(file);
+        }
+
+        // Sort within each group for deterministic output.
+        for group in by_lang.values_mut() {
+            group.sort();
+        }
+
+        let total: usize = by_lang.values().map(|v| v.len()).sum();
+        let mut all_entries: Vec<FileEntry> = Vec::with_capacity(total);
+        let mut indexed = 0usize;
+
+        for (_lang_key, lang_files) in &by_lang {
+            for file in lang_files {
+                let symbols = self.extract_symbols(file, pool);
+                let rel = file.strip_prefix(&self.repo_root).unwrap_or(file);
+                all_entries.push(FileEntry {
+                    path: rel.to_path_buf(),
+                    symbols,
+                    depends_on: vec![],
+                    depended_by: vec![],
+                });
+                indexed += 1;
+                if indexed % 100 == 0 {
+                    tracing::debug!("Indexed {}/{} files", indexed, total);
+                }
             }
         }
 
