@@ -2,7 +2,6 @@ pub mod watcher;
 
 use crate::daemon::watcher::start_watcher;
 use crate::indexer::Indexer;
-use crate::lsp::pool::LspPool;
 use crate::types::FileEntry;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -11,13 +10,10 @@ use std::path::PathBuf;
 pub async fn start(repo_root: PathBuf) -> Result<()> {
     tracing::info!("Starting codebeacon daemon for {}", repo_root.display());
 
-    let root_uri = format!("file://{}", repo_root.display());
-    let config = crate::config_file::load(&repo_root).unwrap_or_default();
-    let mut pool = LspPool::new(&root_uri).with_overrides(config.lsp.overrides.clone());
     let mut indexer = Indexer::new(&repo_root);
 
     // Re-index files changed while the daemon was offline
-    if let Err(e) = indexer.catchup_index(&mut pool) {
+    if let Err(e) = indexer.catchup_index() {
         tracing::warn!("catch-up index failed: {e}");
     }
 
@@ -39,7 +35,7 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
             .to_path_buf();
 
         if changed_file.exists() {
-            let symbols = indexer.extract_symbols(&changed_file, &mut pool);
+            let symbols = indexer.extract_symbols(&changed_file);
             let entry = FileEntry {
                 path: rel.clone(),
                 symbols,

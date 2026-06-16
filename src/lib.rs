@@ -1,6 +1,7 @@
 pub mod config;
 pub mod config_file;
 pub mod daemon;
+pub mod extractor;
 pub mod graph;
 pub mod indexer;
 pub mod lsp;

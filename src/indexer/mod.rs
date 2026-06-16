@@ -8,8 +8,6 @@ use crate::graph::bfs::score_files;
 use crate::graph::persistence;
 use crate::indexer::package::{group_into_packages, hot_symbols};
 use crate::indexer::writer::{write_index, write_package};
-use crate::lsp::pool::LspPool;
-use crate::lsp::parser::parse_document_symbols;
 use crate::types::{FileEntry, PackageSummary, RepoIndex};
 use anyhow::Result;
 use chrono::Utc;
@@ -48,29 +46,12 @@ impl Indexer {
         Self { repo_root: repo_root.to_path_buf(), graph, config }
     }
 
-    pub fn extract_symbols(&mut self, path: &Path, pool: &mut LspPool) -> Vec<crate::types::SymbolEntry> {
-        if let Some(lang) = detect_language(path) {
-            if let Some(client) = pool.get_or_start(&lang) {
-                let raw = client.document_symbols(path, lang.language_id())
-                    .unwrap_or(serde_json::Value::Null);
-                let mut symbols = parse_document_symbols(&raw);
-                // csharp-ls loads Roslyn in the background; first response is often empty
-                if symbols.is_empty() && lang == Language::CSharp {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    if let Some(client2) = pool.get_or_start(&lang) {
-                        let raw2 = client2.document_symbols(path, lang.language_id())
-                            .unwrap_or(serde_json::Value::Null);
-                        symbols = parse_document_symbols(&raw2);
-                    }
-                }
-                return symbols;
-            }
-        }
-        vec![]
+    pub fn extract_symbols(&self, path: &Path) -> Vec<crate::types::SymbolEntry> {
+        crate::extractor::extract_symbols(path)
     }
 
-    pub fn index_file(&mut self, path: &Path, pool: &mut LspPool) -> Result<()> {
-        let symbols = self.extract_symbols(path, pool);
+    pub fn index_file(&mut self, path: &Path) -> Result<()> {
+        let symbols = self.extract_symbols(path);
         self.index_file_no_lsp(path, symbols)
     }
 
@@ -171,7 +152,7 @@ impl Indexer {
     }
 
     /// Re-index files modified after graph.bin was last written (startup catch-up).
-    pub fn catchup_index(&mut self, pool: &mut LspPool) -> Result<()> {
+    pub fn catchup_index(&mut self) -> Result<()> {
         let graph_path = codeindex_dir(&self.repo_root).join("graph.bin");
         let cutoff = std::fs::metadata(&graph_path)
             .and_then(|m| m.modified())
@@ -209,7 +190,7 @@ impl Indexer {
 
         // Re-index all stale files in a single batch
         for path in &stale {
-            let symbols = self.extract_symbols(path, pool);
+            let symbols = self.extract_symbols(path);
             let rel = path.strip_prefix(&self.repo_root).unwrap_or(path);
             all_entries.push(FileEntry {
                 path: rel.to_path_buf(),
@@ -229,131 +210,24 @@ impl Indexer {
         persistence::save(&self.graph, &path)
     }
 
-    fn pool_index_language_group(
-        &self,
-        lang: &crate::config::Language,
-        files: Vec<PathBuf>,
-        concurrency: usize,
-        overrides: &std::collections::HashMap<String, String>,
-    ) -> Vec<(PathBuf, Vec<crate::types::SymbolEntry>)> {
-        use std::sync::{Arc, Mutex};
-        use std::sync::mpsc;
-        use crate::lsp::client::LspClient;
-        use crate::lsp::parser::parse_document_symbols;
-
-        let workers = concurrency.max(1);
-        let binary = overrides.get(lang.language_id())
-            .map(String::as_str)
-            .unwrap_or(lang.lsp_binary())
-            .to_string();
-        let args: Vec<String> = lang.lsp_args().iter().map(|s| s.to_string()).collect();
-        let root_uri = crate::lsp::client::path_to_uri(&self.repo_root);
-        let lang_id = lang.language_id().to_string();
-
-        // Check if LSP binary is available; if not, return empty symbols for all files
-        if !crate::lsp::pool::is_binary_available(&binary) {
-            return files.into_iter().map(|p| (p, vec![])).collect();
-        }
-
-        let (tx_work, rx_work) = mpsc::sync_channel::<PathBuf>(workers * 8);
-        let (tx_result, rx_result) = mpsc::sync_channel::<(PathBuf, Vec<crate::types::SymbolEntry>)>(workers * 8);
-        let rx_work = Arc::new(Mutex::new(rx_work));
-
-        // Spawn W worker threads
-        let handles: Vec<_> = (0..workers).map(|_| {
-            let rx = Arc::clone(&rx_work);
-            let tx = tx_result.clone();
-            let binary = binary.clone();
-            let args = args.clone();
-            let root_uri = root_uri.clone();
-            let lang_id = lang_id.clone();
-            std::thread::spawn(move || {
-                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                let mut client = match LspClient::start(&binary, &arg_refs, &root_uri) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("Worker failed to start {binary}: {e}");
-                        return;
-                    }
-                };
-                loop {
-                    let path = match rx.lock().unwrap().recv() {
-                        Ok(p) => p,
-                        Err(_) => break, // no more work
-                    };
-                    let raw = client.document_symbols(&path, &lang_id)
-                        .unwrap_or(serde_json::Value::Null);
-                    let symbols = parse_document_symbols(&raw);
-                    if tx.send((path, symbols)).is_err() {
-                        break;
-                    }
-                }
-            })
-        }).collect();
-        drop(tx_result); // drop extra sender so rx_result knows when workers are done
-
-        // Feed work to the pool
-        for file in files {
-            if tx_work.send(file).is_err() {
-                break; // workers died
-            }
-        }
-        drop(tx_work); // signal workers no more work
-
-        // Collect results
-        let mut results = Vec::new();
-        while let Ok(r) = rx_result.recv() {
-            results.push(r);
-        }
-
-        // Wait for all worker threads
-        for handle in handles {
-            let _ = handle.join();
-        }
-
-        results
-    }
-
-    pub fn full_index(&mut self, _pool: &mut LspPool) -> Result<()> {
+    pub fn full_index(&self) -> Result<()> {
         let files = self.collect_source_files()?;
-        tracing::info!("Indexing {} files with LSP concurrency={}", files.len(), self.config.lsp_concurrency);
+        tracing::info!("Indexing {} files", files.len());
 
-        // Group files by language key (None = no LSP)
-        let mut by_lang: std::collections::HashMap<Option<String>, Vec<PathBuf>> = std::collections::HashMap::new();
-        for file in files {
-            let lang_key = detect_language(&file).map(|l| l.language_id().to_owned());
-            by_lang.entry(lang_key).or_default().push(file);
-        }
-        for files in by_lang.values_mut() { files.sort(); }
-
-        let total = by_lang.values().map(|v| v.len()).sum::<usize>();
-        let mut all_entries: Vec<FileEntry> = Vec::with_capacity(total);
-
-        for (lang_key, lang_files) in by_lang {
-            let results: Vec<(PathBuf, Vec<crate::types::SymbolEntry>)> = if let Some(ref key) = lang_key {
-                if let Some(lang) = crate::config::language_from_id(key) {
-                    let concurrency = self.config.lsp_concurrency;
-                    let overrides = self.config.lsp.overrides.clone();
-                    self.pool_index_language_group(&lang, lang_files, concurrency, &overrides)
-                } else {
-                    lang_files.into_iter().map(|p| (p, vec![])).collect()
-                }
-            } else {
-                lang_files.into_iter().map(|p| (p, vec![])).collect()
-            };
-
-            for (file, symbols) in results {
-                let rel = file.strip_prefix(&self.repo_root).unwrap_or(&file).to_path_buf();
-                all_entries.push(FileEntry {
+        use rayon::prelude::*;
+        let all_entries: Vec<FileEntry> = files
+            .par_iter()
+            .map(|path| {
+                let symbols = crate::extractor::extract_symbols(path);
+                let rel = path.strip_prefix(&self.repo_root).unwrap_or(path).to_path_buf();
+                FileEntry {
                     path: rel,
                     symbols,
                     depends_on: vec![],
                     depended_by: vec![],
-                });
-            }
-
-            tracing::debug!("Indexed {}/{} files so far", all_entries.len(), total);
-        }
+                }
+            })
+            .collect();
 
         self.rebuild_index(all_entries)?;
         self.save_graph()?;
