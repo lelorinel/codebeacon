@@ -7,6 +7,10 @@ edition = "2021"
 name = "lcp"
 path = "src/main.rs"
 
+[[test]]
+name = "indexer_integration"
+path = "tests/integration/indexer_test.rs"
+
 [lib]
 name = "lcp"
 path = "src/lib.rs"
