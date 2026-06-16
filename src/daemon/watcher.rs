@@ -6,6 +6,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
+use crate::indexer::DEFAULT_IGNORE_DIRS;
 
 const DEBOUNCE_MS: u64 = 100;
 
@@ -22,6 +23,13 @@ pub fn start_watcher(root: PathBuf, tx: Sender<PathBuf>) -> Result<RecommendedWa
             while let Ok(Ok(event)) = notify_rx.try_recv() {
                 if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
                     for path in event.paths {
+                        if path.components().any(|c| {
+                            if let std::path::Component::Normal(n) = c {
+                                DEFAULT_IGNORE_DIRS.contains(&n.to_string_lossy().as_ref())
+                            } else { false }
+                        }) {
+                            continue;
+                        }
                         pending.insert(path, Instant::now());
                     }
                 }

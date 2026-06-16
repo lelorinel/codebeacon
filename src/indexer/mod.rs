@@ -14,10 +14,12 @@ use anyhow::Result;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
-static DEFAULT_IGNORE_DIRS: &[&str] = &[
+pub static DEFAULT_IGNORE_DIRS: &[&str] = &[
     "node_modules", "vendor", "dist", "build", "out", ".next", ".nuxt",
     "target", "__pycache__", ".venv", "venv", "env", ".tox",
     ".git", ".codeindex", ".idea", ".vscode",
+    "Library", "Temp", "Obj", "obj", "Logs", "Build", "Builds",
+    "MemoryCaptures", "UserSettings", "bin", ".vs",
 ];
 
 fn build_ignore(repo_root: &Path) -> ignore::gitignore::Gitignore {
