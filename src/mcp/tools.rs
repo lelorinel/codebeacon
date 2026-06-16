@@ -137,7 +137,7 @@ mod tests {
             name: "auth".into(),
             files: vec![FileEntry {
                 path: PathBuf::from("src/auth.rs"),
-                symbols: vec![SymbolEntry { name: "login".into(), signature: "fn login()".into(), kind: SymbolKind::Function, line: 1 }],
+                symbols: vec![SymbolEntry { name: "login".into(), signature: "fn login()".into(), kind: SymbolKind::Function, line: 1, character: 0 }],
                 depends_on: vec![],
                 depended_by: vec![],
             }],

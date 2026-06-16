@@ -7,25 +7,45 @@ pub fn parse_document_symbols(value: &Value) -> Vec<SymbolEntry> {
         Some(a) => a,
         None => return vec![],
     };
-    arr.iter()
-        .filter_map(|s| {
-            let name = s["name"].as_str()?.to_string();
-            let kind_num = s["kind"].as_u64().unwrap_or(0);
-            let kind = lsp_kind_to_symbol_kind(kind_num);
-            let line = s["range"]["start"]["line"].as_u64().unwrap_or(0) as u32;
-            let signature = s
-                .get("detail")
-                .and_then(|d| d.as_str())
-                .unwrap_or(&name)
-                .to_string();
-            Some(SymbolEntry {
-                name,
-                signature,
-                kind,
-                line,
-            })
-        })
-        .collect()
+    let mut out = Vec::new();
+    for s in arr {
+        collect_symbol(s, &mut out);
+    }
+    out
+}
+
+fn collect_symbol(s: &Value, out: &mut Vec<SymbolEntry>) {
+    // Determine position: DocumentSymbol uses "range", SymbolInformation uses "location.range"
+    let range = s.get("range")
+        .or_else(|| s.pointer("/location/range"));
+    let line = range
+        .and_then(|r| r.pointer("/start/line"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let character = range
+        .and_then(|r| r.pointer("/start/character"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    let name = match s["name"].as_str() {
+        Some(n) => n.to_string(),
+        None => return,
+    };
+    let kind_num = s["kind"].as_u64().unwrap_or(0);
+    let kind = lsp_kind_to_symbol_kind(kind_num);
+    let signature = s.get("detail")
+        .and_then(|d| d.as_str())
+        .unwrap_or(&name)
+        .to_string();
+
+    out.push(SymbolEntry { name, signature, kind, line, character });
+
+    // Recurse into children (DocumentSymbol only)
+    if let Some(children) = s["children"].as_array() {
+        for child in children {
+            collect_symbol(child, out);
+        }
+    }
 }
 
 pub fn parse_references(value: &Value) -> Vec<ReferenceLocation> {
@@ -92,10 +112,47 @@ mod tests {
         assert_eq!(symbols[0].name, "login");
         assert_eq!(symbols[0].kind, crate::types::SymbolKind::Function);
         assert_eq!(symbols[0].line, 5);
+        assert_eq!(symbols[0].character, 0);
         assert_eq!(
             symbols[0].signature,
             "fn login(email: &str, password: &str) -> Result<Token>"
         );
+    }
+
+    #[test]
+    fn parses_hierarchical_document_symbols() {
+        // Simulates a C# class (kind 5 = Struct/Class) with a nested method (kind 12 = Function)
+        let raw = json!([{
+            "name": "PlayerController",
+            "kind": 5,
+            "range": {
+                "start": { "line": 2, "character": 0 },
+                "end": { "line": 30, "character": 1 }
+            },
+            "detail": "class PlayerController",
+            "children": [{
+                "name": "Update",
+                "kind": 12,
+                "range": {
+                    "start": { "line": 10, "character": 4 },
+                    "end": { "line": 20, "character": 5 }
+                },
+                "detail": "void Update()"
+            }]
+        }]);
+
+        let symbols = parse_document_symbols(&raw);
+        assert_eq!(symbols.len(), 2, "class and its child method should both be present");
+
+        assert_eq!(symbols[0].name, "PlayerController");
+        assert_eq!(symbols[0].kind, crate::types::SymbolKind::Struct);
+        assert_eq!(symbols[0].line, 2);
+        assert_eq!(symbols[0].character, 0);
+
+        assert_eq!(symbols[1].name, "Update");
+        assert_eq!(symbols[1].kind, crate::types::SymbolKind::Function);
+        assert_eq!(symbols[1].line, 10);
+        assert_eq!(symbols[1].character, 4);
     }
 
     #[test]
