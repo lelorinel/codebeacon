@@ -381,6 +381,16 @@ jobs:
             cp -r "$dir" "npm/$name"
           done
           mv npm/codebeacon-main npm/codebeacon 2>/dev/null || true
+      - name: Fix repository URLs in package.json files
+        run: |
+          find npm -name "package.json" | while read f; do
+            node -e "
+              const fs = require('fs');
+              const pkg = JSON.parse(fs.readFileSync('$f', 'utf8'));
+              pkg.repository = { type: 'git', url: 'https://github.com/lelorinel/codebeacon.git' };
+              fs.writeFileSync('$f', JSON.stringify(pkg, null, 2));
+            "
+          done
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
