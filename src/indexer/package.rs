@@ -1,6 +1,5 @@
 use crate::types::{FileEntry, PackageDetail};
 use std::collections::HashMap;
-use std::path::Path;
 
 pub fn group_into_packages(files: Vec<FileEntry>) -> Vec<PackageDetail> {
     let mut groups: HashMap<String, Vec<FileEntry>> = HashMap::new();
