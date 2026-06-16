@@ -35,7 +35,9 @@ pub fn start_watcher(root: PathBuf, tx: Sender<PathBuf>) -> Result<RecommendedWa
 
             for path in ready {
                 pending.remove(&path);
-                let _ = tx.blocking_send(path);
+                if tx.blocking_send(path).is_err() {
+                    return; // receiver dropped, exit thread
+                }
             }
 
             thread::sleep(Duration::from_millis(20));
