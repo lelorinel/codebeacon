@@ -383,25 +383,26 @@ jobs:
           mv npm/codebeacon-main npm/codebeacon 2>/dev/null || true
       - name: Fix repository URLs in package.json files
         run: |
-          find npm -name "package.json" | while read f; do
-            node -e "
-              const fs = require('fs');
-              const pkg = JSON.parse(fs.readFileSync('$f', 'utf8'));
-              pkg.repository = { type: 'git', url: 'https://github.com/lelorinel/codebeacon.git' };
-              fs.writeFileSync('$f', JSON.stringify(pkg, null, 2));
-            "
-          done
+          python3 << 'PYEOF'
+          import json, pathlib
+          repo = {"type": "git", "url": "https://github.com/lelorinel/codebeacon.git"}
+          for p in pathlib.Path("npm").rglob("package.json"):
+              pkg = json.loads(p.read_text())
+              pkg["repository"] = repo
+              p.write_text(json.dumps(pkg, indent=2))
+              print(f"Patched {p}")
+          PYEOF
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for pkg in npm/codebeacon-*/; do
-            npm publish "$pkg" --access public || echo "Already published or failed: $pkg"
+            npm publish "$pkg" --access public --no-git-checks || echo "Already published or failed: $pkg"
           done
       - name: Publish umbrella package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish npm/codebeacon --access public
+        run: npm publish npm/codebeacon --access public --no-git-checks
 
   announce:
     needs:
