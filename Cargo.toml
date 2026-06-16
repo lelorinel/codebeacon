@@ -7,6 +7,10 @@ edition = "2021"
 name = "lcp"
 path = "src/main.rs"
 
+[lib]
+name = "lcp"
+path = "src/lib.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
