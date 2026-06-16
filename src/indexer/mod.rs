@@ -13,6 +13,7 @@ use crate::lsp::parser::parse_document_symbols;
 use crate::types::{FileEntry, PackageSummary, RepoIndex};
 use anyhow::Result;
 use chrono::Utc;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub static DEFAULT_IGNORE_DIRS: &[&str] = &[
@@ -47,14 +48,19 @@ impl Indexer {
         Self { repo_root: repo_root.to_path_buf(), graph, config }
     }
 
-    pub fn index_file(&mut self, path: &Path, pool: &mut LspPool) -> Result<()> {
-        let symbols = if let Some(lang) = detect_language(path) {
+    pub fn extract_symbols(&mut self, path: &Path, pool: &mut LspPool) -> Vec<crate::types::SymbolEntry> {
+        if let Some(lang) = detect_language(path) {
             if let Some(client) = pool.get_or_start(&lang) {
-                let raw = client.document_symbols(path, lang.language_id()).unwrap_or(serde_json::Value::Null);
-                parse_document_symbols(&raw)
-            } else { vec![] }
-        } else { vec![] };
+                let raw = client.document_symbols(path, lang.language_id())
+                    .unwrap_or(serde_json::Value::Null);
+                return parse_document_symbols(&raw);
+            }
+        }
+        vec![]
+    }
 
+    pub fn index_file(&mut self, path: &Path, pool: &mut LspPool) -> Result<()> {
+        let symbols = self.extract_symbols(path, pool);
         self.index_file_no_lsp(path, symbols)
     }
 
@@ -74,6 +80,26 @@ impl Indexer {
         self.rebuild_index(all)?;
         self.save_graph()?;
         Ok(())
+    }
+
+    pub fn load_all_entries(&self) -> Vec<FileEntry> {
+        let codeindex = codeindex_dir(&self.repo_root);
+        let packages_dir = codeindex.join("packages");
+        if !packages_dir.exists() { return vec![]; }
+        let mut entries = vec![];
+        for pkg_file in std::fs::read_dir(&packages_dir).into_iter().flatten().flatten() {
+            if let Ok(text) = std::fs::read_to_string(pkg_file.path()) {
+                if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
+                    entries.extend(pkg.files);
+                }
+            }
+        }
+        entries
+    }
+
+    pub fn rebuild_index_from_map(&self, map: &HashMap<PathBuf, FileEntry>) -> Result<()> {
+        let entries: Vec<FileEntry> = map.values().cloned().collect();
+        self.rebuild_index(entries)
     }
 
     fn collect_all_file_entries_except(&self, exclude: &Path) -> Vec<FileEntry> {
@@ -173,11 +199,25 @@ impl Indexer {
     pub fn full_index(&mut self, pool: &mut LspPool) -> Result<()> {
         let files = self.collect_source_files()?;
         tracing::info!("Indexing {} files", files.len());
-        for file in files {
-            if let Err(e) = self.index_file(&file, pool) {
-                tracing::warn!("Failed to index {}: {e}", file.display());
+
+        let mut all_entries: Vec<FileEntry> = Vec::with_capacity(files.len());
+        for file in &files {
+            let symbols = self.extract_symbols(file, pool);
+            let rel = file.strip_prefix(&self.repo_root).unwrap_or(file);
+            all_entries.push(FileEntry {
+                path: rel.to_path_buf(),
+                symbols,
+                depends_on: vec![],
+                depended_by: vec![],
+            });
+            // Log progress every 100 files
+            if all_entries.len() % 100 == 0 {
+                tracing::debug!("Indexed {}/{} files", all_entries.len(), files.len());
             }
         }
+
+        self.rebuild_index(all_entries)?;
+        self.save_graph()?;
         Ok(())
     }
 
