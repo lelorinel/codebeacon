@@ -39,7 +39,7 @@ pub struct SymbolEntry {
     pub line: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum SymbolKind {
     Function,
     Struct,
