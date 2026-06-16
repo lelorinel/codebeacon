@@ -50,6 +50,7 @@ mod tests {
                     signature: "fn login() -> Token".into(),
                     kind: SymbolKind::Function,
                     line: 5,
+                    character: 0,
                 }],
                 depends_on: vec!["db::find_user".into()],
                 depended_by: vec![],

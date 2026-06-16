@@ -37,6 +37,8 @@ pub struct SymbolEntry {
     pub signature: String,
     pub kind: SymbolKind,
     pub line: u32,
+    #[serde(default)]
+    pub character: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
