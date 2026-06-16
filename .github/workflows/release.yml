@@ -373,30 +373,43 @@ jobs:
           pattern: npm-*
           path: npm-artifacts/
           merge-multiple: false
-      - name: Arrange packages
+      - name: Arrange platform packages
         run: |
           mkdir -p npm
-          for dir in npm-artifacts/npm-*/; do
+          for dir in npm-artifacts/npm-codebeacon-linux-x64 npm-artifacts/npm-codebeacon-linux-arm64 npm-artifacts/npm-codebeacon-win32-x64 npm-artifacts/npm-codebeacon-darwin-x64 npm-artifacts/npm-codebeacon-darwin-arm64; do
             name=$(basename "$dir" | sed 's/^npm-//')
-            cp -r "$dir" "npm/$name"
+            if [ -d "$dir" ]; then
+              cp -r "$dir" "npm/$name"
+              echo "Arranged: npm/$name"
+            fi
           done
-          mv npm/codebeacon-main npm/codebeacon 2>/dev/null || true
-      - name: Rewrite umbrella package.json
-        run: >-
-          VER=$(node -p "require('./npm/codebeacon-linux-x64/package.json').version") &&
-          VER=$VER node -e "
-          var fs=require('fs');
-          var v=process.env.VER;
-          var pkg={name:'codebeacon',version:v,description:'Hierarchical code index for AI coding assistants - LSP-backed MCP server',bin:{'codebeacon':'bin/codebeacon'},repository:{type:'git',url:'https://github.com/lelorinel/codebeacon.git'},optionalDependencies:{'codebeacon-linux-x64':v,'codebeacon-linux-arm64':v,'codebeacon-win32-x64':v,'codebeacon-darwin-x64':v,'codebeacon-darwin-arm64':v}};
-          fs.writeFileSync('npm/codebeacon/package.json',JSON.stringify(pkg,null,2));
-          console.log('Wrote umbrella package.json for',v);
-          "
+      - name: Get version from platform package
+        id: ver
+        run: echo "version=$(node -p "require('./npm/codebeacon-linux-x64/package.json').version")" >> $GITHUB_OUTPUT
+      - name: Create umbrella package from scratch
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          mkdir -p npm/codebeacon/bin
+          printf '{\n  "name": "codebeacon",\n  "version": "%s",\n  "description": "Hierarchical code index for AI coding assistants - LSP-backed MCP server",\n  "bin": {"codebeacon": "bin/codebeacon"},\n  "repository": {"type": "git", "url": "https://github.com/lelorinel/codebeacon.git"},\n  "license": "AGPL-3.0",\n  "optionalDependencies": {"codebeacon-linux-x64": "%s", "codebeacon-linux-arm64": "%s", "codebeacon-win32-x64": "%s", "codebeacon-darwin-x64": "%s", "codebeacon-darwin-arm64": "%s"}\n}\n' \
+            "$V" "$V" "$V" "$V" "$V" "$V" > npm/codebeacon/package.json
+          printf '%s\n' '#!/usr/bin/env node' '"use strict";' \
+            'const {execFileSync}=require("child_process");' \
+            'const p=process.platform,a=process.arch;' \
+            'const m={"linux-x64":"codebeacon-linux-x64","linux-arm64":"codebeacon-linux-arm64","darwin-x64":"codebeacon-darwin-x64","darwin-arm64":"codebeacon-darwin-arm64","win32-x64":"codebeacon-win32-x64"};' \
+            'const pkg=m[p+"-"+a];if(!pkg){console.error("Unsupported platform:",p,a);process.exit(1);}' \
+            'const bin=require.resolve(pkg+"/bin/codebeacon"+(p==="win32"?".exe":""));' \
+            'execFileSync(bin,process.argv.slice(2),{stdio:"inherit"});' > npm/codebeacon/bin/codebeacon
+          chmod +x npm/codebeacon/bin/codebeacon
+          echo "=== package.json ==="
+          cat npm/codebeacon/package.json
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in npm/codebeacon-*/; do
-            npm publish "$pkg" --access public --no-git-checks || echo "Already published or failed: $pkg"
+          for pkg in npm/codebeacon-linux-x64 npm/codebeacon-linux-arm64 npm/codebeacon-win32-x64 npm/codebeacon-darwin-x64 npm/codebeacon-darwin-arm64; do
+            if [ -d "$pkg" ]; then
+              npm publish "$pkg" --access public --no-git-checks || echo "Already published or failed: $pkg"
+            fi
           done
       - name: Publish umbrella package
         env:
