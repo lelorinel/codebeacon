@@ -1,10 +1,10 @@
 [package]
-name = "lcp"
+name = "codebeacon"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "lcp"
+name = "codebeacon"
 path = "src/main.rs"
 
 [[test]]
@@ -12,7 +12,7 @@ name = "indexer_integration"
 path = "tests/integration/indexer_test.rs"
 
 [lib]
-name = "lcp"
+name = "codebeacon"
 path = "src/lib.rs"
 
 [dependencies]

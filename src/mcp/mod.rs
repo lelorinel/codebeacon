@@ -15,7 +15,7 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
         "initialize" => McpResponse::result(id, json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "lcp", "version": "0.1.0" }
+            "serverInfo": { "name": "codebeacon", "version": "0.1.0" }
         })),
         "initialized" => McpResponse::notification(json!({})),
         "tools/list" => McpResponse::result(id, tool_list()),

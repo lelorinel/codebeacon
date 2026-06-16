@@ -34,7 +34,7 @@ pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
 
 pub fn handle_get_context(ctx: &ToolContext, _args: &Value) -> Result<Value> {
     let index = read_index(&ctx.codeindex())?
-        .context("No .codeindex/ found — run `lcp init` first")?;
+        .context("No .codeindex/ found — run `codebeacon init` first")?;
     Ok(text_content(serde_json::to_string_pretty(&index)?))
 }
 

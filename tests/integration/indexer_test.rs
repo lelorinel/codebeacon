@@ -1,5 +1,5 @@
-use lcp::indexer::Indexer;
-use lcp::lsp::pool::LspPool;
+use codebeacon::indexer::Indexer;
+use codebeacon::lsp::pool::LspPool;
 use std::path::Path;
 
 fn fixture_root() -> &'static Path {
