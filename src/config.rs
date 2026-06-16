@@ -6,6 +6,7 @@ pub enum Language {
     Go,
     Python,
     TypeScript,
+    CSharp,
 }
 
 impl Language {
@@ -15,12 +16,14 @@ impl Language {
             Language::Go => "gopls",
             Language::Python => "pylsp",
             Language::TypeScript => "typescript-language-server",
+            Language::CSharp => "csharp-ls",
         }
     }
 
     pub fn lsp_args(&self) -> &'static [&'static str] {
         match self {
             Language::TypeScript => &["--stdio"],
+            Language::CSharp => &["--stdio"],
             _ => &[],
         }
     }
@@ -44,6 +47,7 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         "go" => Some(Language::Go),
         "py" => Some(Language::Python),
         "ts" | "js" | "tsx" | "jsx" => Some(Language::TypeScript),
+        "cs" => Some(Language::CSharp),
         _ => None,
     }
 }
@@ -83,6 +87,7 @@ mod tests {
         assert_eq!(detect_language(std::path::Path::new("foo.py")), Some(Language::Python));
         assert_eq!(detect_language(std::path::Path::new("foo.ts")), Some(Language::TypeScript));
         assert_eq!(detect_language(std::path::Path::new("foo.js")), Some(Language::TypeScript));
+        assert_eq!(detect_language(std::path::Path::new("foo.cs")), Some(Language::CSharp));
         assert_eq!(detect_language(std::path::Path::new("foo.txt")), None);
     }
 }
