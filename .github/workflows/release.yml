@@ -381,22 +381,16 @@ jobs:
             cp -r "$dir" "npm/$name"
           done
           mv npm/codebeacon-main npm/codebeacon 2>/dev/null || true
-      - name: Show npm directory layout
-        run: find npm -type f | sort
-      - name: Fix repository URLs in package.json files
-        run: |
-          node << 'JSEOF'
-          const fs = require('fs');
-          const { execSync } = require('child_process');
-          const files = execSync('find npm -name "package.json"').toString().trim().split('\n').filter(Boolean);
-          console.log('Found:', files);
-          for (const f of files) {
-            const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
-            pkg.repository = { type: 'git', url: 'https://github.com/lelorinel/codebeacon.git' };
-            fs.writeFileSync(f, JSON.stringify(pkg, null, 2));
-            console.log('Patched:', f, '-> repository:', pkg.repository.url);
-          }
-          JSEOF
+      - name: Rewrite umbrella package.json
+        run: >-
+          VER=$(node -p "require('./npm/codebeacon-linux-x64/package.json').version") &&
+          VER=$VER node -e "
+          var fs=require('fs');
+          var v=process.env.VER;
+          var pkg={name:'codebeacon',version:v,description:'Hierarchical code index for AI coding assistants - LSP-backed MCP server',bin:{'codebeacon':'bin/codebeacon'},repository:{type:'git',url:'https://github.com/lelorinel/codebeacon.git'},optionalDependencies:{'codebeacon-linux-x64':v,'codebeacon-linux-arm64':v,'codebeacon-win32-x64':v,'codebeacon-darwin-x64':v,'codebeacon-darwin-arm64':v}};
+          fs.writeFileSync('npm/codebeacon/package.json',JSON.stringify(pkg,null,2));
+          console.log('Wrote umbrella package.json for',v);
+          "
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
