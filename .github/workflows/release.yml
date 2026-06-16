@@ -278,34 +278,117 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
-  publish-npm:
+  publish-crates:
     needs:
       - plan
       - host
     if: ${{ always() && needs.host.result == 'success' }}
     runs-on: "ubuntu-22.04"
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  build-npm-artifacts:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && needs.host.result == 'success' }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            pkg: codebeacon-linux-x64
+            main: true
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            pkg: codebeacon-linux-arm64
+            main: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            pkg: codebeacon-win32-x64
+            main: false
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            pkg: codebeacon-darwin-x64
+            main: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            pkg: codebeacon-darwin-arm64
+            main: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cross-compile tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
       - name: Install cargo-npm
         run: cargo install cargo-npm
-      - name: Build release binary
-        run: cargo build --release
-      - name: Generate npm packages
-        run: cargo npm generate --infer-targets
+      - name: Generate npm packages (platform + umbrella on main runner)
+        if: matrix.main == true
+        run: cargo npm generate --target x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu --target x86_64-pc-windows-msvc --target x86_64-apple-darwin --target aarch64-apple-darwin
+      - name: Generate npm package (platform only)
+        if: matrix.main == false
+        run: cargo npm generate --target ${{ matrix.target }}
+      - name: Upload platform npm package
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-${{ matrix.pkg }}
+          path: npm/${{ matrix.pkg }}
+      - name: Upload umbrella npm package
+        if: matrix.main == true
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-codebeacon-main
+          path: npm/codebeacon
+
+  publish-npm:
+    needs:
+      - build-npm-artifacts
+    if: ${{ always() && needs.build-npm-artifacts.result == 'success' }}
+    runs-on: "ubuntu-22.04"
+    steps:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-      - name: Publish platform package
-        run: npm publish npm/codebeacon-linux-x64 --access public
-        continue-on-error: true
-      - name: Publish main package
+      - name: Download all npm artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: npm-*
+          path: npm-artifacts/
+          merge-multiple: false
+      - name: Arrange packages
+        run: |
+          mkdir -p npm
+          for dir in npm-artifacts/npm-*/; do
+            name=$(basename "$dir" | sed 's/^npm-//')
+            cp -r "$dir" "npm/$name"
+          done
+          mv npm/codebeacon-main npm/codebeacon 2>/dev/null || true
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for pkg in npm/codebeacon-*/; do
+            npm publish "$pkg" --access public || echo "Already published or failed: $pkg"
+          done
+      - name: Publish umbrella package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish npm/codebeacon --access public
 
   announce:
