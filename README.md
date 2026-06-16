@@ -19,7 +19,7 @@ Existing approaches have real gaps:
 | Problem | Codebeacon |
 |---|---|
 | Context window overflow on large repos | ✅ hierarchical index, L0 always fits |
-| LSP timeout on fresh checkout | ✅ graceful degrade, empty symbols |
+| LSP timeout on fresh checkout | ✅ regex extraction, no LSP needed |
 | node_modules / vendor / build dirs indexed | ✅ auto-skip + .gitignore respected |
 | Changes missed while daemon is offline | ✅ catch-up index on restart |
 | "What breaks if I change this file?" | ✅ BFS on dependency graph |
@@ -31,7 +31,7 @@ Existing approaches have real gaps:
 ![Architecture](docs/images/architecture.png)
 
 1. **FSWatcher** detects file changes with 100ms debounce
-2. **LSP Pool** fetches symbols via system-installed LSP binaries (rust-analyzer, gopls, pylsp, etc.)
+2. **Extractor** parses symbols from source code line-by-line with regex (no LSP needed)
 3. **Indexer** writes a hierarchical `.codeindex/` and updates a petgraph dependency graph
 4. **MCP Server** exposes 5 tools for AI to query on demand
 
@@ -54,15 +54,16 @@ When you open files, Codebeacon runs BFS from those files through the dependency
 
 ## Supported Languages
 
-| Language | LSP Binary |
+| Language | Extensions |
 |---|---|
-| Rust | `rust-analyzer` |
-| Go | `gopls` |
-| Python | `pylsp` |
-| TypeScript / JavaScript | `typescript-language-server` |
-| C# / Unity | `csharp-ls` |
+| Rust | `.rs` |
+| Go | `.go` |
+| Python | `.py` |
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx` |
+| C# | `.cs` |
 
-LSP binaries are not bundled — Codebeacon uses whatever is installed on your system. If a binary is missing, Codebeacon indexes file structure without symbols (graceful degrade).
+Symbol extraction is done via regex — no LSP binaries needed for indexing.  
+LSP binaries (`rust-analyzer`, `gopls`, `pylsp`, `typescript-language-server`, `csharp-ls`) are only required for the `find_definition` and `find_references` MCP tools. If a binary is missing, those tools fall back to index-based search.
 
 ---
 
