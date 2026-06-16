@@ -3,12 +3,16 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct LspClient {
     process: Child,
     stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
     id: MessageId,
+    rx: Receiver<Value>,
 }
 
 pub struct MessageId(u64);
@@ -27,6 +31,25 @@ pub fn encode_message(body: &str) -> String {
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
 }
 
+fn read_message(reader: &mut BufReader<ChildStdout>) -> Result<Value> {
+    let mut content_length: Option<usize> = None;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        let line = line.trim();
+        if line.is_empty() {
+            break;
+        }
+        if let Some(val) = line.strip_prefix("Content-Length: ") {
+            content_length = Some(val.parse()?);
+        }
+    }
+    let len = content_length.context("missing Content-Length")?;
+    let mut buf = vec![0u8; len];
+    std::io::Read::read_exact(reader, &mut buf)?;
+    Ok(serde_json::from_slice(&buf)?)
+}
+
 impl LspClient {
     pub fn start(binary: &str, args: &[&str], root_uri: &str) -> Result<Self> {
         let mut process = Command::new(binary)
@@ -39,12 +62,27 @@ impl LspClient {
 
         let stdin = process.stdin.take().unwrap();
         let stdout = process.stdout.take().unwrap();
-        let reader = BufReader::new(stdout);
+
+        let (tx, rx) = mpsc::sync_channel::<Value>(64);
+        let mut reader = BufReader::new(stdout);
+        std::thread::spawn(move || {
+            loop {
+                match read_message(&mut reader) {
+                    Ok(msg) => {
+                        if tx.send(msg).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
         let mut client = Self {
             process,
             stdin,
-            reader,
             id: MessageId::new(),
+            rx,
         };
 
         client.initialize(root_uri)?;
@@ -59,25 +97,6 @@ impl LspClient {
         Ok(())
     }
 
-    fn recv(&mut self) -> Result<Value> {
-        let mut content_length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            self.reader.read_line(&mut line)?;
-            let line = line.trim();
-            if line.is_empty() {
-                break;
-            }
-            if let Some(val) = line.strip_prefix("Content-Length: ") {
-                content_length = Some(val.parse()?);
-            }
-        }
-        let len = content_length.context("missing Content-Length")?;
-        let mut buf = vec![0u8; len];
-        std::io::Read::read_exact(&mut self.reader, &mut buf)?;
-        Ok(serde_json::from_slice(&buf)?)
-    }
-
     fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = self.id.next();
         self.send(&json!({
@@ -87,7 +106,17 @@ impl LspClient {
             "params": params
         }))?;
         loop {
-            let msg = self.recv()?;
+            let msg = self.rx.recv_timeout(REQUEST_TIMEOUT)
+                .map_err(|e| anyhow::anyhow!("LSP request timeout: {e}"))?;
+            // Handle server-initiated requests (e.g. workspace/configuration from csharp-ls)
+            if msg.get("method").is_some() && msg.get("id").is_some() {
+                let _ = self.send(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": msg["id"],
+                    "result": null
+                }));
+                continue;
+            }
             if msg.get("id").and_then(|v| v.as_u64()) == Some(id) {
                 return Ok(msg["result"].clone());
             }
@@ -173,7 +202,9 @@ impl Drop for LspClient {
 
 pub fn path_to_uri(path: &Path) -> String {
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    format!("file://{}", abs.display())
+    let s = abs.to_string_lossy();
+    let encoded = s.replace(' ', "%20").replace('#', "%23");
+    format!("file://{}", encoded)
 }
 
 #[cfg(test)]

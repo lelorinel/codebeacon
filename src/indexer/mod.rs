@@ -53,7 +53,17 @@ impl Indexer {
             if let Some(client) = pool.get_or_start(&lang) {
                 let raw = client.document_symbols(path, lang.language_id())
                     .unwrap_or(serde_json::Value::Null);
-                return parse_document_symbols(&raw);
+                let mut symbols = parse_document_symbols(&raw);
+                // csharp-ls loads Roslyn in the background; first response is often empty
+                if symbols.is_empty() && lang == Language::CSharp {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Some(client2) = pool.get_or_start(&lang) {
+                        let raw2 = client2.document_symbols(path, lang.language_id())
+                            .unwrap_or(serde_json::Value::Null);
+                        symbols = parse_document_symbols(&raw2);
+                    }
+                }
+                return symbols;
             }
         }
         vec![]
