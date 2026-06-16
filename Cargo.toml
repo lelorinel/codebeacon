@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 which = "4"
 walkdir = "2"
+ignore = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
