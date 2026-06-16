@@ -296,6 +296,90 @@ mod tests {
         assert!(text.contains("login"));
     }
 
+    fn setup_codeindex_multi(tmp: &TempDir) {
+        use crate::indexer::writer::{write_index, write_package};
+        let idx = RepoIndex {
+            repo: "test".into(),
+            generated_at: "2026-06-16T00:00:00Z".into(),
+            packages: vec![
+                PackageSummary { name: "auth".into(), purpose: "auth".into(), files: 1, score: 0.9 },
+                PackageSummary { name: "api".into(), purpose: "api".into(), files: 1, score: 0.8 },
+            ],
+            hot_symbols: vec!["validate".into()],
+        };
+        let pkg_auth = PackageDetail {
+            name: "auth".into(),
+            files: vec![FileEntry {
+                path: PathBuf::from("src/auth.rs"),
+                symbols: vec![SymbolEntry {
+                    name: "validate".into(),
+                    signature: "fn validate() -> bool".into(),
+                    kind: SymbolKind::Function,
+                    line: 3,
+                    character: 0,
+                }],
+                depends_on: vec![],
+                depended_by: vec![],
+            }],
+        };
+        let pkg_api = PackageDetail {
+            name: "api".into(),
+            files: vec![FileEntry {
+                path: PathBuf::from("src/api.rs"),
+                symbols: vec![SymbolEntry {
+                    name: "validate".into(),
+                    signature: "fn validate() -> Result<()>".into(),
+                    kind: SymbolKind::Function,
+                    line: 10,
+                    character: 0,
+                }],
+                depends_on: vec![],
+                depended_by: vec![],
+            }],
+        };
+        let ci = tmp.path().join(".codeindex");
+        write_index(&idx, &ci).unwrap();
+        write_package(&pkg_auth, &ci).unwrap();
+        write_package(&pkg_api, &ci).unwrap();
+    }
+
+    #[test]
+    fn find_definition_returns_all_matches_sorted() {
+        let tmp = TempDir::new().unwrap();
+        setup_codeindex_multi(&tmp);
+        let ctx = ToolContext {
+            repo_root: tmp.path().to_path_buf(),
+            lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+        };
+        let result = handle_find_definition(&ctx, &serde_json::json!({"symbol": "validate"})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        // Both files should appear
+        assert!(text.contains("src/auth.rs"), "expected auth.rs in: {text}");
+        assert!(text.contains("src/api.rs"), "expected api.rs in: {text}");
+        // Lines should appear in sorted order (api.rs comes before auth.rs alphabetically)
+        let auth_pos = text.find("auth.rs").unwrap();
+        let api_pos = text.find("api.rs").unwrap();
+        assert!(api_pos < auth_pos, "expected api.rs to appear before auth.rs (sorted): {text}");
+    }
+
+    #[test]
+    fn find_references_index_fallback() {
+        let tmp = TempDir::new().unwrap();
+        setup_codeindex(&tmp);
+        let ctx = ToolContext {
+            repo_root: tmp.path().to_path_buf(),
+            lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+        };
+        // No file/line/character provided — falls through to index fallback
+        let result = handle_find_references(&ctx, &serde_json::json!({"symbol": "login"})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("[index fallback]"),
+            "expected '[index fallback]' label in: {text}"
+        );
+        assert!(text.contains("login"), "expected 'login' in: {text}");
+    }
+
     #[test]
     fn get_dependents_returns_list() {
         let tmp = TempDir::new().unwrap();
