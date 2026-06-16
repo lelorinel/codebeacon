@@ -69,11 +69,19 @@ LSP binaries (`rust-analyzer`, `gopls`, `pylsp`, `typescript-language-server`, `
 
 ## Installation
 
+### From crates.io
+
 ```bash
-cargo install --git https://github.com/lelorinel/codebeacon
+cargo install codebeacon
 ```
 
-Or build from source:
+### From npm
+
+```bash
+npx codebeacon
+```
+
+### From source
 
 ```bash
 git clone https://github.com/lelorinel/codebeacon
