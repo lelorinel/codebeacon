@@ -50,7 +50,7 @@ impl Indexer {
     pub fn index_file(&mut self, path: &Path, pool: &mut LspPool) -> Result<()> {
         let symbols = if let Some(lang) = detect_language(path) {
             if let Some(client) = pool.get_or_start(&lang) {
-                let raw = client.document_symbols(path).unwrap_or(serde_json::Value::Null);
+                let raw = client.document_symbols(path, lang.language_id()).unwrap_or(serde_json::Value::Null);
                 parse_document_symbols(&raw)
             } else { vec![] }
         } else { vec![] };

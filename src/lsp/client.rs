@@ -110,7 +110,7 @@ impl LspClient {
                 "rootUri": root_uri,
                 "capabilities": {
                     "textDocument": {
-                        "documentSymbol": { "hierarchicalDocumentSymbolSupport": false }
+                        "documentSymbol": { "hierarchicalDocumentSymbolSupport": true }
                     }
                 }
             }),
@@ -119,7 +119,7 @@ impl LspClient {
         Ok(())
     }
 
-    pub fn document_symbols(&mut self, file_path: &Path) -> Result<Value> {
+    pub fn document_symbols(&mut self, file_path: &Path, language_id: &str) -> Result<Value> {
         let uri = path_to_uri(file_path);
         let text = std::fs::read_to_string(file_path)?;
         self.notify(
@@ -127,7 +127,7 @@ impl LspClient {
             json!({
                 "textDocument": {
                     "uri": uri,
-                    "languageId": "rust",
+                    "languageId": language_id,
                     "version": 1,
                     "text": text
                 }
