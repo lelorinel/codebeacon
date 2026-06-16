@@ -195,15 +195,36 @@ impl Indexer {
         }
 
         tracing::info!("catch-up: re-indexing {} changed file(s)", stale.len());
-        for path in stale {
-            if let Err(e) = self.index_file(&path, pool) {
-                tracing::warn!("catch-up error for {}: {e}", path.display());
-            }
+
+        // Build a set of stale relative paths for fast lookup
+        let stale_set: std::collections::HashSet<PathBuf> = stale.iter()
+            .map(|p| p.strip_prefix(&self.repo_root).unwrap_or(p).to_path_buf())
+            .collect();
+
+        // Load existing index entries, excluding stale ones
+        let mut all_entries: Vec<FileEntry> = self.load_all_entries()
+            .into_iter()
+            .filter(|e| !stale_set.contains(&e.path))
+            .collect();
+
+        // Re-index all stale files in a single batch
+        for path in &stale {
+            let symbols = self.extract_symbols(path, pool);
+            let rel = path.strip_prefix(&self.repo_root).unwrap_or(path);
+            all_entries.push(FileEntry {
+                path: rel.to_path_buf(),
+                symbols,
+                depends_on: vec![],
+                depended_by: vec![],
+            });
         }
+
+        self.rebuild_index(all_entries)?;
+        self.save_graph()?;
         Ok(())
     }
 
-    fn save_graph(&self) -> Result<()> {
+    pub fn save_graph(&self) -> Result<()> {
         let path = codeindex_dir(&self.repo_root).join("graph.bin");
         persistence::save(&self.graph, &path)
     }

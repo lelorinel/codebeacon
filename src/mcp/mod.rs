@@ -40,9 +40,10 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
 
 pub fn run_stdio_server(repo_root: PathBuf) -> Result<()> {
     let root_uri = path_to_uri(&repo_root);
+    let cfg = crate::config_file::load(&repo_root).unwrap_or_default();
     let ctx = ToolContext {
         repo_root,
-        lsp_pool: Mutex::new(LspPool::new(&root_uri)),
+        lsp_pool: Mutex::new(LspPool::new(&root_uri).with_overrides(cfg.lsp.overrides.clone())),
     };
     let stdin = io::stdin();
     let stdout = io::stdout();
