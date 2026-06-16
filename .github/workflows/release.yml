@@ -390,7 +390,7 @@ jobs:
         run: |
           V="${{ steps.ver.outputs.version }}"
           mkdir -p npm/codebeacon/bin
-          printf '{"name":"codebeacon","version":"%s","description":"Hierarchical code index for AI coding assistants","bin":{"codebeacon":"bin/codebeacon"},"license":"AGPL-3.0","optionalDependencies":{"codebeacon-linux-x64":"%s","codebeacon-linux-arm64":"%s","codebeacon-win32-x64":"%s","codebeacon-darwin-x64":"%s","codebeacon-darwin-arm64":"%s"}}\n' \
+          printf '{"name":"codebeacon","version":"%s","description":"Hierarchical code index for AI coding assistants","bin":{"codebeacon":"bin/codebeacon"},"license":"AGPL-3.0","repository":{"type":"git","url":"https://github.com/lelorinel/codebeacon"},"optionalDependencies":{"codebeacon-linux-x64":"%s","codebeacon-linux-arm64":"%s","codebeacon-win32-x64":"%s","codebeacon-darwin-x64":"%s","codebeacon-darwin-arm64":"%s"}}\n' \
             "$V" "$V" "$V" "$V" "$V" "$V" > npm/codebeacon/package.json
           echo "=== Verifying package.json ==="
           cat npm/codebeacon/package.json
