@@ -16,23 +16,20 @@ pub fn group_into_packages(files: Vec<FileEntry>) -> Vec<PackageDetail> {
     }).collect()
 }
 
-fn package_name_for(path: &Path) -> String {
-    let components: Vec<_> = path.components().collect();
+fn package_name_for(path: &std::path::Path) -> String {
+    // Collect only directory components (no dots = not a file)
+    let dirs: Vec<String> = path.components()
+        .filter_map(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            if s.contains('.') { None } else { Some(s.into_owned()) }
+        })
+        .collect();
 
-    match components.len() {
-        0 | 1 => "root".to_string(),
-        _ => {
-            // Use the second component (index 1) as package name
-            // For "src/auth/login.rs" → "auth"
-            // For "src/db/pool.rs" → "db"
-            let second = components[1].as_os_str().to_string_lossy();
-            // If it contains a dot it's a file not a directory, use "root"
-            if second.contains('.') {
-                "root".to_string()
-            } else {
-                second.into_owned()
-            }
-        }
+    match dirs.as_slice() {
+        [] => "root".to_string(),
+        [only] => only.clone(),                               // "auth/login.rs" → "auth"
+        [first, second, ..] if first == "src" => second.clone(), // "src/auth/login.rs" → "auth"
+        [first, ..] => first.clone(),                        // "cmd/main.go" → "cmd"
     }
 }
 
