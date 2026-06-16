@@ -13,6 +13,11 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
     let mut pool = LspPool::new(&root_uri);
     let mut indexer = Indexer::new(&repo_root);
 
+    // Re-index files changed while the daemon was offline
+    if let Err(e) = indexer.catchup_index(&mut pool) {
+        tracing::warn!("catch-up index failed: {e}");
+    }
+
     let (tx, mut rx) = tokio::sync::mpsc::channel::<PathBuf>(100);
     let _watcher = start_watcher(repo_root.clone(), tx)?;
 
