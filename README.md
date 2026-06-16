@@ -85,13 +85,13 @@ LSP binaries are not bundled — Codebeacon uses whatever is installed on your s
 ## Installation
 
 ```bash
-cargo install --git https://github.com/yourusername/codebeacon
+cargo install --git https://github.com/lelorinel/codebeacon
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/yourusername/codebeacon
+git clone https://github.com/lelorinel/codebeacon
 cd codebeacon
 cargo build --release
 # binary at target/release/codebeacon
@@ -191,4 +191,4 @@ Tested on a 445-file TypeScript + Rust monorepo:
 
 Codebeacon is open source under the [GNU AGPL v3.0](LICENSE).
 
-If you want to use Codebeacon in a proprietary product without open-sourcing your modifications, a commercial license is available. Contact: **[your@email.com]**
+If you want to use Codebeacon in a proprietary product without open-sourcing your modifications, a commercial license is available. Contact: **[onur.fidan@outlook.com.tr](mailto:onur.fidan@outlook.com.tr)**
