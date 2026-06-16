@@ -14,6 +14,21 @@ use anyhow::Result;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
+static DEFAULT_IGNORE_DIRS: &[&str] = &[
+    "node_modules", "vendor", "dist", "build", "out", ".next", ".nuxt",
+    "target", "__pycache__", ".venv", "venv", "env", ".tox",
+    ".git", ".codeindex", ".idea", ".vscode",
+];
+
+fn build_ignore(repo_root: &Path) -> ignore::gitignore::Gitignore {
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(repo_root);
+    let gitignore = repo_root.join(".gitignore");
+    if gitignore.exists() {
+        let _ = builder.add(gitignore);
+    }
+    builder.build().unwrap_or_else(|_| ignore::gitignore::Gitignore::empty())
+}
+
 pub struct Indexer {
     pub repo_root: PathBuf,
     pub graph: DependencyGraph,
@@ -133,14 +148,24 @@ impl Indexer {
     fn collect_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = vec![];
         let codeindex = codeindex_dir(&self.repo_root);
+        let ignore = build_ignore(&self.repo_root);
+
         for entry in walkdir::WalkDir::new(&self.repo_root)
             .into_iter()
+            .filter_entry(|e| {
+                // prune entire ignored directories so we never descend into them
+                if e.file_type().is_dir() {
+                    let name = e.file_name().to_string_lossy();
+                    return !DEFAULT_IGNORE_DIRS.contains(&name.as_ref());
+                }
+                true
+            })
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
             let path = entry.path().to_path_buf();
             if path.starts_with(&codeindex) { continue; }
-            if path.components().any(|c| c.as_os_str() == ".git") { continue; }
+            if ignore.matched(&path, false).is_ignore() { continue; }
             if detect_language(&path).is_some() {
                 files.push(path);
             }
