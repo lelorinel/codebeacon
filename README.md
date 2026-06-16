@@ -14,15 +14,15 @@ grep for symbol → read file → grep again → read another file → ...
 
 On a 500-file repo this is slow. On a 10,000-file repo it overflows the context window before the AI even starts writing code.
 
-Existing tools have real gaps:
+Existing approaches have real gaps:
 
-| Problem | existing tools | existing tools | Codebeacon |
-|---|---|---|---|
-| Context window overflow on large repos | ❌ flat map, no hierarchy | ❌ | ✅ hierarchical index, L0 always fits |
-| LSP timeout on fresh checkout | — | ❌ (a known issue, a known issue) | ✅ graceful degrade, empty symbols |
-| node_modules / vendor indexed | ❌ manual .existing toolsignore | ❌ | ✅ auto-skip + .gitignore |
-| Changes missed while daemon offline | ❌ | ❌ | ✅ catch-up index on restart |
-| Dependency graph for "what breaks?" | ❌ | ❌ | ✅ BFS on petgraph |
+| Problem | Codebeacon |
+|---|---|
+| Context window overflow on large repos | ✅ hierarchical index, L0 always fits |
+| LSP timeout on fresh checkout | ✅ graceful degrade, empty symbols |
+| node_modules / vendor / build dirs indexed | ✅ auto-skip + .gitignore respected |
+| Changes missed while daemon is offline | ✅ catch-up index on restart |
+| "What breaks if I change this file?" | ✅ BFS on dependency graph |
 
 ---
 
