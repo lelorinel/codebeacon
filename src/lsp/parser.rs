@@ -75,7 +75,9 @@ pub fn parse_definition(value: &Value) -> Option<(PathBuf, u32)> {
 }
 
 fn uri_to_path(uri: &str) -> PathBuf {
-    PathBuf::from(uri.trim_start_matches("file://"))
+    let path = uri.trim_start_matches("file://");
+    let decoded = path.replace("%20", " ").replace("%23", "#");
+    PathBuf::from(decoded)
 }
 
 fn lsp_kind_to_symbol_kind(kind: u64) -> SymbolKind {

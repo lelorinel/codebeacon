@@ -1,12 +1,14 @@
 pub mod protocol;
 pub mod tools;
 
+use crate::lsp::pool::LspPool;
 use crate::mcp::protocol::{tool_list, McpRequest, McpResponse};
 use crate::mcp::tools::{dispatch, ToolContext};
 use anyhow::Result;
 use serde_json::json;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpResponse {
     let id = req.id.clone().unwrap_or(json!(null));
@@ -36,7 +38,11 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
 }
 
 pub fn run_stdio_server(repo_root: PathBuf) -> Result<()> {
-    let ctx = ToolContext { repo_root };
+    let root_uri = format!("file://{}", repo_root.display());
+    let ctx = ToolContext {
+        repo_root,
+        lsp_pool: Mutex::new(LspPool::new(&root_uri)),
+    };
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();

@@ -1,13 +1,16 @@
 use crate::config::codeindex_dir;
 use crate::graph::{persistence as graph_persistence, DependencyGraph};
 use crate::indexer::writer::{read_index, read_package};
+use crate::lsp::pool::LspPool;
 use crate::mcp::protocol::text_content;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 pub struct ToolContext {
     pub repo_root: PathBuf,
+    pub lsp_pool: Mutex<LspPool>,
 }
 
 impl ToolContext {
@@ -151,7 +154,7 @@ mod tests {
     fn get_context_returns_index_json() {
         let tmp = TempDir::new().unwrap();
         setup_codeindex(&tmp);
-        let ctx = ToolContext { repo_root: tmp.path().to_path_buf() };
+        let ctx = ToolContext { repo_root: tmp.path().to_path_buf(), lsp_pool: Mutex::new(LspPool::new("file:///tmp")) };
         let result = handle_get_context(&ctx, &serde_json::json!({"files": []})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("auth"));
@@ -161,7 +164,7 @@ mod tests {
     fn drill_package_returns_package_detail() {
         let tmp = TempDir::new().unwrap();
         setup_codeindex(&tmp);
-        let ctx = ToolContext { repo_root: tmp.path().to_path_buf() };
+        let ctx = ToolContext { repo_root: tmp.path().to_path_buf(), lsp_pool: Mutex::new(LspPool::new("file:///tmp")) };
         let result = handle_drill_package(&ctx, &serde_json::json!({"name": "auth"})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("login"));
@@ -173,7 +176,7 @@ mod tests {
         let mut g = crate::graph::DependencyGraph::new();
         g.add_dependency(&PathBuf::from("src/api.rs"), &PathBuf::from("src/auth.rs"));
         crate::graph::persistence::save(&g, &tmp.path().join(".codeindex/graph.bin")).unwrap();
-        let ctx = ToolContext { repo_root: tmp.path().to_path_buf() };
+        let ctx = ToolContext { repo_root: tmp.path().to_path_buf(), lsp_pool: Mutex::new(LspPool::new("file:///tmp")) };
         let result = handle_get_dependents(&ctx, &serde_json::json!({"file": "src/auth.rs"})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("api.rs"));
