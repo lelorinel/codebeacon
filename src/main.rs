@@ -1,4 +1,5 @@
 mod config;
+mod config_file;
 mod daemon;
 mod graph;
 mod indexer;

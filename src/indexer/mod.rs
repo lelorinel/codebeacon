@@ -1,7 +1,8 @@
 pub mod package;
 pub mod writer;
 
-use crate::config::{codeindex_dir, detect_language};
+use crate::config::{codeindex_dir, detect_language, Language};
+use crate::config_file::CodeIndexConfig;
 use crate::graph::DependencyGraph;
 use crate::graph::bfs::score_files;
 use crate::graph::persistence;
@@ -34,6 +35,7 @@ fn build_ignore(repo_root: &Path) -> ignore::gitignore::Gitignore {
 pub struct Indexer {
     pub repo_root: PathBuf,
     pub graph: DependencyGraph,
+    pub config: CodeIndexConfig,
 }
 
 impl Indexer {
@@ -41,7 +43,8 @@ impl Indexer {
         let codeindex = codeindex_dir(repo_root);
         let graph_path = codeindex.join("graph.bin");
         let graph = persistence::load(&graph_path).unwrap_or_default();
-        Self { repo_root: repo_root.to_path_buf(), graph }
+        let config = crate::config_file::load(repo_root).unwrap_or_default();
+        Self { repo_root: repo_root.to_path_buf(), graph, config }
     }
 
     pub fn index_file(&mut self, path: &Path, pool: &mut LspPool) -> Result<()> {
@@ -183,6 +186,32 @@ impl Indexer {
         let codeindex = codeindex_dir(&self.repo_root);
         let ignore = build_ignore(&self.repo_root);
 
+        // Build a secondary gitignore for user-configured glob patterns.
+        let glob_ignore = {
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(&self.repo_root);
+            for glob in &self.config.ignore_globs {
+                let _ = builder.add_line(None, glob);
+            }
+            builder.build().unwrap_or_else(|_| ignore::gitignore::Gitignore::empty())
+        };
+
+        // Lowercase languages filter (empty = all languages allowed).
+        let lang_filter: Vec<String> = self.config.languages
+            .iter()
+            .map(|l| l.to_lowercase())
+            .collect();
+
+        // Helper to convert Language enum to lowercase name for filter matching.
+        let lang_name = |lang: &Language| -> &'static str {
+            match lang {
+                Language::Rust => "rust",
+                Language::Go => "go",
+                Language::Python => "python",
+                Language::TypeScript => "typescript",
+                Language::CSharp => "csharp",
+            }
+        };
+
         for entry in walkdir::WalkDir::new(&self.repo_root)
             .into_iter()
             .filter_entry(|e| {
@@ -199,7 +228,26 @@ impl Indexer {
             let path = entry.path().to_path_buf();
             if path.starts_with(&codeindex) { continue; }
             if ignore.matched(&path, false).is_ignore() { continue; }
-            if detect_language(&path).is_some() {
+
+            // Check extra_ignore_dirs: skip files under any matching ancestor directory.
+            if !self.config.extra_ignore_dirs.is_empty() {
+                let in_extra_dir = path.parent().map(|parent| {
+                    parent.components().any(|c| {
+                        let s = c.as_os_str().to_string_lossy();
+                        self.config.extra_ignore_dirs.iter().any(|d| d == s.as_ref())
+                    })
+                }).unwrap_or(false);
+                if in_extra_dir { continue; }
+            }
+
+            // Check user glob patterns.
+            if glob_ignore.matched(&path, false).is_ignore() { continue; }
+
+            if let Some(lang) = detect_language(&path) {
+                // Apply language filter if specified.
+                if !lang_filter.is_empty() {
+                    if !lang_filter.iter().any(|l| l == lang_name(&lang)) { continue; }
+                }
                 files.push(path);
             }
         }
