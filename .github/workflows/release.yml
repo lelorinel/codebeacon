@@ -338,6 +338,7 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
       - name: Fix binary permissions (source)
+        if: matrix.os != 'windows-latest'
         run: chmod +x target/${{ matrix.target }}/release/codebeacon
       - name: Install cargo-npm
         run: cargo install cargo-npm
@@ -348,7 +349,8 @@ jobs:
         if: matrix.main == false
         run: cargo npm generate --target ${{ matrix.target }}
       - name: Fix permissions on generated platform binaries
-        run: find npm -type f \( -name "codebeacon" -o -name "codebeacon.exe" \) -exec chmod +x {} +
+        if: matrix.os != 'windows-latest'
+        run: chmod +x npm/*/codebeacon*
       - name: Upload platform npm package
         uses: actions/upload-artifact@v7
         with:
