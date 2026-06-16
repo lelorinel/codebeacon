@@ -35,8 +35,14 @@ pub fn start_watcher(root: PathBuf, tx: Sender<PathBuf>) -> Result<RecommendedWa
 
             for path in ready {
                 pending.remove(&path);
-                if tx.blocking_send(path).is_err() {
-                    return; // receiver dropped, exit thread
+                match tx.try_send(path) {
+                    Ok(_) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        tracing::warn!("LCP watcher: channel full, dropping file change event");
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        return; // receiver dropped, exit thread
+                    }
                 }
             }
 
