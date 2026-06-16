@@ -2,6 +2,15 @@
 name = "codebeacon"
 version = "0.1.0"
 edition = "2021"
+description = "Hierarchical code index for AI coding assistants — LSP-backed, MCP-served"
+license = "AGPL-3.0"
+repository = "https://github.com/lelorinel/codebeacon"
+homepage = "https://github.com/lelorinel/codebeacon"
+keywords = ["mcp", "lsp", "ai", "code-index", "developer-tools"]
+categories = ["development-tools", "command-line-utilities"]
+
+[package.metadata.npm]
+name = "codebeacon"
 
 [[bin]]
 name = "codebeacon"
@@ -35,3 +44,8 @@ ignore = "0.4"
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
