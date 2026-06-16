@@ -129,6 +129,37 @@ impl Indexer {
         Ok(())
     }
 
+    /// Re-index files modified after graph.bin was last written (startup catch-up).
+    pub fn catchup_index(&mut self, pool: &mut LspPool) -> Result<()> {
+        let graph_path = codeindex_dir(&self.repo_root).join("graph.bin");
+        let cutoff = std::fs::metadata(&graph_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        let stale: Vec<PathBuf> = self.collect_source_files()?
+            .into_iter()
+            .filter(|p| {
+                std::fs::metadata(p)
+                    .and_then(|m| m.modified())
+                    .map(|mtime| mtime > cutoff)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if stale.is_empty() {
+            tracing::info!("catch-up: index is fresh, nothing to re-index");
+            return Ok(());
+        }
+
+        tracing::info!("catch-up: re-indexing {} changed file(s)", stale.len());
+        for path in stale {
+            if let Err(e) = self.index_file(&path, pool) {
+                tracing::warn!("catch-up error for {}: {e}", path.display());
+            }
+        }
+        Ok(())
+    }
+
     fn save_graph(&self) -> Result<()> {
         let path = codeindex_dir(&self.repo_root).join("graph.bin");
         persistence::save(&self.graph, &path)
