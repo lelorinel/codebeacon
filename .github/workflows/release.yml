@@ -390,8 +390,10 @@ jobs:
         run: |
           V="${{ steps.ver.outputs.version }}"
           mkdir -p npm/codebeacon/bin
-          printf '{\n  "name": "codebeacon",\n  "version": "%s",\n  "description": "Hierarchical code index for AI coding assistants - LSP-backed MCP server",\n  "bin": {"codebeacon": "bin/codebeacon"},\n  "repository": {"type": "git", "url": "https://github.com/lelorinel/codebeacon.git"},\n  "license": "AGPL-3.0",\n  "optionalDependencies": {"codebeacon-linux-x64": "%s", "codebeacon-linux-arm64": "%s", "codebeacon-win32-x64": "%s", "codebeacon-darwin-x64": "%s", "codebeacon-darwin-arm64": "%s"}\n}\n' \
+          printf '{"name":"codebeacon","version":"%s","description":"Hierarchical code index for AI coding assistants","bin":{"codebeacon":"bin/codebeacon"},"license":"AGPL-3.0","optionalDependencies":{"codebeacon-linux-x64":"%s","codebeacon-linux-arm64":"%s","codebeacon-win32-x64":"%s","codebeacon-darwin-x64":"%s","codebeacon-darwin-arm64":"%s"}}\n' \
             "$V" "$V" "$V" "$V" "$V" "$V" > npm/codebeacon/package.json
+          echo "=== Verifying package.json ==="
+          cat npm/codebeacon/package.json
           printf '%s\n' '#!/usr/bin/env node' '"use strict";' \
             'const {execFileSync}=require("child_process");' \
             'const p=process.platform,a=process.arch;' \
