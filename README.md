@@ -123,6 +123,8 @@ Add to your project's `.mcp.json`:
 }
 ```
 
+*If installed via `npx`, use `"command": "npx"` and `"args": ["codebeacon", "serve"]` instead.*
+
 Or via CLI:
 
 ```bash
