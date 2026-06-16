@@ -27,6 +27,16 @@ impl Language {
             _ => &[],
         }
     }
+
+    pub fn language_id(&self) -> &'static str {
+        match self {
+            Language::Rust       => "rust",
+            Language::Go         => "go",
+            Language::Python     => "python",
+            Language::TypeScript => "typescript",
+            Language::CSharp     => "csharp",
+        }
+    }
 }
 
 pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
@@ -49,6 +59,17 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         "ts" | "js" | "tsx" | "jsx" => Some(Language::TypeScript),
         "cs" => Some(Language::CSharp),
         _ => None,
+    }
+}
+
+pub fn language_from_id(id: &str) -> Option<Language> {
+    match id {
+        "rust"       => Some(Language::Rust),
+        "go"         => Some(Language::Go),
+        "python"     => Some(Language::Python),
+        "typescript" => Some(Language::TypeScript),
+        "csharp"     => Some(Language::CSharp),
+        _            => None,
     }
 }
 

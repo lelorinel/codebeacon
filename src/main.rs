@@ -1,4 +1,5 @@
 mod config;
+mod config_file;
 mod daemon;
 mod graph;
 mod indexer;
@@ -42,7 +43,8 @@ async fn main() -> Result<()> {
         Commands::Init { root } => {
             let root = resolve_root(root)?;
             let root_uri = format!("file://{}", root.display());
-            let mut pool = lsp::pool::LspPool::new(&root_uri);
+            let cfg = config_file::load(&root).unwrap_or_default();
+            let mut pool = lsp::pool::LspPool::new(&root_uri).with_overrides(cfg.lsp.overrides.clone());
             let mut indexer = indexer::Indexer::new(&root);
             indexer.full_index(&mut pool)?;
             println!("Index written to {}/.codeindex/", root.display());
