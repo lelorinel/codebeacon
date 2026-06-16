@@ -172,18 +172,36 @@ impl LspClient {
 
     pub fn references(&mut self, file_path: &Path, line: u32, character: u32) -> Result<Value> {
         let uri = path_to_uri(file_path);
+        // Open the document first so the server knows about it
+        if let Ok(text) = std::fs::read_to_string(file_path) {
+            let lang = crate::config::detect_language(file_path)
+                .map(|l| l.language_id())
+                .unwrap_or("text");
+            let _ = self.notify("textDocument/didOpen", json!({
+                "textDocument": { "uri": &uri, "languageId": lang, "version": 1, "text": text }
+            }));
+        }
         self.request(
             "textDocument/references",
             json!({
                 "textDocument": { "uri": uri },
                 "position": { "line": line, "character": character },
-                "context": { "includeDeclaration": false }
+                "context": { "includeDeclaration": true }
             }),
         )
     }
 
     pub fn definition(&mut self, file_path: &Path, line: u32, character: u32) -> Result<Value> {
         let uri = path_to_uri(file_path);
+        // Open the document first so the server knows about it
+        if let Ok(text) = std::fs::read_to_string(file_path) {
+            let lang = crate::config::detect_language(file_path)
+                .map(|l| l.language_id())
+                .unwrap_or("text");
+            let _ = self.notify("textDocument/didOpen", json!({
+                "textDocument": { "uri": &uri, "languageId": lang, "version": 1, "text": text }
+            }));
+        }
         self.request(
             "textDocument/definition",
             json!({

@@ -79,7 +79,12 @@ pub fn tool_list() -> Value {
                 "description": "Find all usages of a symbol across the codebase",
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "symbol": { "type": "string" } },
+                    "properties": {
+                        "symbol": { "type": "string" },
+                        "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
+                        "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
+                        "character": { "type": "integer", "description": "0-based character offset (required with file)" }
+                    },
                     "required": ["symbol"]
                 }
             },
@@ -88,7 +93,12 @@ pub fn tool_list() -> Value {
                 "description": "Find where a symbol is defined",
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "symbol": { "type": "string" } },
+                    "properties": {
+                        "symbol": { "type": "string" },
+                        "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
+                        "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
+                        "character": { "type": "integer", "description": "0-based character offset (required with file)" }
+                    },
                     "required": ["symbol"]
                 }
             },

@@ -50,16 +50,98 @@ pub fn handle_drill_package(ctx: &ToolContext, args: &Value) -> Result<Value> {
 
 pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> {
     let symbol = args["symbol"].as_str().context("missing 'symbol'")?;
-    let mut found: Vec<String> = vec![];
 
+    // If caller provides file + position, use LSP for real usages
+    if let (Some(file), Some(line), Some(character)) = (
+        args["file"].as_str(),
+        args["line"].as_u64(),
+        args["character"].as_u64(),
+    ) {
+        let abs_path = if std::path::Path::new(file).is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            ctx.repo_root.join(file)
+        };
+        if let Some(lang) = crate::config::detect_language(&abs_path) {
+            let mut pool = ctx.lsp_pool.lock().unwrap();
+            if let Some(client) = pool.get_or_start(&lang) {
+                match client.references(&abs_path, line as u32, character as u32) {
+                    Ok(result) => {
+                        let refs = crate::lsp::parser::parse_references(&result);
+                        if !refs.is_empty() {
+                            let lines: Vec<String> = refs.iter().map(|r| {
+                                let rel = r.file.strip_prefix(&ctx.repo_root).unwrap_or(&r.file);
+                                format!("{}:{}", rel.display(), r.line)
+                            }).collect();
+                            return Ok(text_content(format!(
+                                "References to '{}' (via LSP):\n{}", symbol, lines.join("\n")
+                            )));
+                        }
+                    }
+                    Err(e) => tracing::warn!("LSP references failed: {e}"),
+                }
+            }
+        }
+        // Fall through to index-based
+    }
+
+    // Try to resolve symbol position from index (auto-locate for LSP)
+    // Walk index to find the symbol's definition location
     let packages_dir = ctx.codeindex().join("packages");
-    for entry in std::fs::read_dir(packages_dir).into_iter().flatten().flatten() {
-        if let Ok(text) = std::fs::read_to_string(entry.path()) {
+    let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
+        .into_iter().flatten().flatten()
+        .filter_map(|e| e.path().to_str().map(str::to_string))
+        .collect();
+    pkg_files.sort();
+
+    // Look up symbol in index to get its position, then try LSP references
+    'outer: for pkg_path in &pkg_files {
+        if let Ok(text) = std::fs::read_to_string(pkg_path) {
+            if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
+                for file in &pkg.files {
+                    for sym in &file.symbols {
+                        if sym.name == symbol {
+                            let abs_path = ctx.repo_root.join(&file.path);
+                            if let Some(lang) = crate::config::detect_language(&abs_path) {
+                                let mut pool = ctx.lsp_pool.lock().unwrap();
+                                if let Some(client) = pool.get_or_start(&lang) {
+                                    match client.references(&abs_path, sym.line, sym.character) {
+                                        Ok(result) => {
+                                            let refs = crate::lsp::parser::parse_references(&result);
+                                            if !refs.is_empty() {
+                                                let lines: Vec<String> = refs.iter().map(|r| {
+                                                    let rel = r.file.strip_prefix(&ctx.repo_root).unwrap_or(&r.file);
+                                                    format!("{}:{}", rel.display(), r.line)
+                                                }).collect();
+                                                return Ok(text_content(format!(
+                                                    "References to '{}' (via LSP from index):\n{}", symbol, lines.join("\n")
+                                                )));
+                                            }
+                                        }
+                                        Err(e) => tracing::warn!("LSP references (auto) failed: {e}"),
+                                    }
+                                }
+                            }
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Final fallback: index substring search (old behaviour, clearly labelled)
+    let mut found: Vec<String> = vec![];
+    for pkg_path in &pkg_files {
+        if let Ok(text) = std::fs::read_to_string(pkg_path) {
             if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
                 for file in pkg.files {
                     for sym in &file.symbols {
                         if sym.name.contains(symbol) {
-                            found.push(format!("{}:{} — {}", file.path.display(), sym.line, sym.signature));
+                            found.push(format!(
+                                "{}:{} — {} [index fallback]",
+                                file.path.display(), sym.line, sym.signature
+                            ));
                         }
                     }
                 }
@@ -76,24 +158,68 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
 
 pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> {
     let symbol = args["symbol"].as_str().context("missing 'symbol'")?;
+
+    // If caller provides file + position, try LSP first
+    if let (Some(file), Some(line), Some(character)) = (
+        args["file"].as_str(),
+        args["line"].as_u64(),
+        args["character"].as_u64(),
+    ) {
+        let abs_path = if std::path::Path::new(file).is_absolute() {
+            std::path::PathBuf::from(file)
+        } else {
+            ctx.repo_root.join(file)
+        };
+        if let Some(lang) = crate::config::detect_language(&abs_path) {
+            let mut pool = ctx.lsp_pool.lock().unwrap();
+            if let Some(client) = pool.get_or_start(&lang) {
+                match client.definition(&abs_path, line as u32, character as u32) {
+                    Ok(result) => {
+                        if let Some((def_path, def_line)) = crate::lsp::parser::parse_definition(&result) {
+                            let rel = def_path.strip_prefix(&ctx.repo_root).unwrap_or(&def_path);
+                            return Ok(text_content(format!(
+                                "{}:{} (via LSP)", rel.display(), def_line
+                            )));
+                        }
+                    }
+                    Err(e) => tracing::warn!("LSP definition failed: {e}"),
+                }
+            }
+        }
+        // Fall through to index-based if LSP failed
+    }
+
+    // Index-based fallback: find ALL matching symbols, sorted deterministically
     let packages_dir = ctx.codeindex().join("packages");
-    for entry in std::fs::read_dir(packages_dir).into_iter().flatten().flatten() {
-        if let Ok(text) = std::fs::read_to_string(entry.path()) {
+    let mut found: Vec<String> = vec![];
+    let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
+        .into_iter().flatten().flatten()
+        .filter_map(|e| e.path().to_str().map(str::to_string))
+        .collect();
+    pkg_files.sort(); // deterministic order
+
+    for pkg_path in pkg_files {
+        if let Ok(text) = std::fs::read_to_string(&pkg_path) {
             if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
                 for file in pkg.files {
                     for sym in &file.symbols {
                         if sym.name == symbol {
-                            return Ok(text_content(format!(
+                            found.push(format!(
                                 "{}:{} — {}",
                                 file.path.display(), sym.line, sym.signature
-                            )));
+                            ));
                         }
                     }
                 }
             }
         }
     }
-    Ok(text_content(format!("Definition of '{symbol}' not found")))
+
+    if found.is_empty() {
+        Ok(text_content(format!("Definition of '{symbol}' not found")))
+    } else {
+        Ok(text_content(found.join("\n")))
+    }
 }
 
 pub fn handle_get_dependents(ctx: &ToolContext, args: &Value) -> Result<Value> {
