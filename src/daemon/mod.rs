@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 pub async fn start(repo_root: PathBuf) -> Result<()> {
-    tracing::info!("Starting LCP daemon for {}", repo_root.display());
+    tracing::info!("Starting codebeacon daemon for {}", repo_root.display());
 
     let root_uri = format!("file://{}", repo_root.display());
     let mut pool = LspPool::new(&root_uri);

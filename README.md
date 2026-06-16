@@ -1,4 +1,4 @@
-# LCP — Language Context Protocol
+# Codebeacon
 
 > A hierarchical code index for AI coding assistants. Replaces grep + read loops with a relevance-sorted map that always fits in context.
 
@@ -16,7 +16,7 @@ On a 500-file repo this is slow. On a 10,000-file repo it overflows the context 
 
 Existing tools have real gaps:
 
-| Problem | existing tools | existing tools | LCP |
+| Problem | existing tools | existing tools | Codebeacon |
 |---|---|---|---|
 | Context window overflow on large repos | ❌ flat map, no hierarchy | ❌ | ✅ hierarchical index, L0 always fits |
 | LSP timeout on fresh checkout | — | ❌ (a known issue, a known issue) | ✅ graceful degrade, empty symbols |
@@ -55,7 +55,7 @@ The AI loads `index.json` (~500 tokens) at session start. When it needs more, it
 
 ### Relevance Scoring
 
-When you open files, LCP runs BFS from those files through the dependency graph:
+When you open files, Codebeacon runs BFS from those files through the dependency graph:
 
 | Hop distance | Score |
 |---|---|
@@ -78,23 +78,23 @@ When you open files, LCP runs BFS from those files through the dependency graph:
 | TypeScript / JavaScript | `typescript-language-server` |
 | C# / Unity | `csharp-ls` |
 
-LSP binaries are not bundled — LCP uses whatever is installed on your system. If a binary is missing, LCP indexes file structure without symbols (graceful degrade).
+LSP binaries are not bundled — Codebeacon uses whatever is installed on your system. If a binary is missing, Codebeacon indexes file structure without symbols (graceful degrade).
 
 ---
 
 ## Installation
 
 ```bash
-cargo install --git https://github.com/yourusername/lcp
+cargo install --git https://github.com/yourusername/codebeacon
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/yourusername/lcp
-cd lcp
+git clone https://github.com/yourusername/codebeacon
+cd codebeacon
 cargo build --release
-# binary at target/release/lcp
+# binary at target/release/codebeacon
 ```
 
 ---
@@ -105,14 +105,14 @@ cargo build --release
 
 ```bash
 cd your-project
-lcp init
+codebeacon init
 # Indexed 445 files → .codeindex/
 ```
 
 ### Start the daemon + MCP server
 
 ```bash
-lcp serve
+codebeacon serve
 ```
 
 ### Claude Code integration
@@ -122,8 +122,8 @@ Add to your project's `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "lcp": {
-      "command": "lcp",
+    "codebeacon": {
+      "command": "codebeacon",
       "args": ["serve"]
     }
   }
@@ -133,10 +133,10 @@ Add to your project's `.mcp.json`:
 Or via CLI:
 
 ```bash
-claude mcp add lcp -- lcp serve
+claude mcp add codebeacon -- codebeacon serve
 ```
 
-Claude Code starts `lcp serve` automatically when the session opens. The daemon catches up any changes made while it was offline.
+Claude Code starts `codebeacon serve` automatically when the session opens. The daemon catches up any changes made while it was offline.
 
 ---
 
@@ -172,7 +172,7 @@ Claude Code starts `lcp serve` automatically when the session opens. The daemon 
   graph.bin         ← Binary dependency graph (daemon only)
 ```
 
-`graph.bin` is written on every update. On restart, LCP re-indexes only files changed since the last write — no full re-index needed.
+`graph.bin` is written on every update. On restart, Codebeacon re-indexes only files changed since the last write — no full re-index needed.
 
 ---
 
@@ -182,13 +182,13 @@ Tested on a 445-file TypeScript + Rust monorepo:
 
 | Approach | Tool calls | Files read | Tokens (est.) |
 |---|---|---|---|
-| Claude without LCP | 5+ | 3–10 | ~5,000–8,000 |
-| Claude with LCP | 2 | 0 | ~800–1,200 |
+| Claude without Codebeacon | 5+ | 3–10 | ~5,000–8,000 |
+| Claude with Codebeacon | 2 | 0 | ~800–1,200 |
 
 ---
 
 ## License
 
-LCP is open source under the [GNU AGPL v3.0](LICENSE).
+Codebeacon is open source under the [GNU AGPL v3.0](LICENSE).
 
-If you want to use LCP in a proprietary product without open-sourcing your modifications, a commercial license is available. Contact: **[your@email.com]**
+If you want to use Codebeacon in a proprietary product without open-sourcing your modifications, a commercial license is available. Contact: **[your@email.com]**

@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "lcp", about = "Language Context Protocol — hierarchical code index for AI")]
+#[command(name = "codebeacon", about = "Codebeacon — hierarchical code index for AI coding assistants")]
 pub struct Cli {
     #[command(subcommand)]
     command: Commands,
