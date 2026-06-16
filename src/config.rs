@@ -62,6 +62,17 @@ pub fn detect_language(path: &Path) -> Option<Language> {
     }
 }
 
+pub fn language_from_id(id: &str) -> Option<Language> {
+    match id {
+        "rust"       => Some(Language::Rust),
+        "go"         => Some(Language::Go),
+        "python"     => Some(Language::Python),
+        "typescript" => Some(Language::TypeScript),
+        "csharp"     => Some(Language::CSharp),
+        _            => None,
+    }
+}
+
 pub fn codeindex_dir(repo_root: &Path) -> PathBuf {
     repo_root.join(".codeindex")
 }
