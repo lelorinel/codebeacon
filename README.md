@@ -34,14 +34,15 @@ Existing approaches have real gaps:
 
 1. **FSWatcher** detects file changes with 100ms debounce
 2. **Extractor** parses symbols from source code line-by-line with regex (no LSP needed)
-3. **Indexer** writes a hierarchical `.codeindex/` and updates a petgraph dependency graph
-4. **MCP Server** exposes tools for AI to query on demand
+3. **Indexer** resolves import statements to build an accurate dependency graph, then writes a hierarchical `.codeindex/`
+4. **LSP Enricher** (background) uses LSP `definition` calls on import statements to discover additional dependency edges
+5. **MCP Server** exposes tools for AI to query on demand
 
 The AI loads `index.json` (~500 tokens) at session start. When it needs more, it drills down — no more grep loops.
 
 ### Relevance Scoring
 
-When you open files, Codebeacon runs BFS from those files through the dependency graph:
+Codebeacon resolves `import` / `use` / `require` statements to build an accurate dependency graph at index time. When you open files, it runs BFS from those files through the dependency graph:
 
 | Hop distance | Score |
 |---|---|
@@ -109,7 +110,9 @@ You can skip this step — if no index exists when the MCP server starts, the `i
 ### Start the daemon + MCP server
 
 ```bash
-codebeacon serve
+codebeacon serve                         # default: code context tools only
+codebeacon serve --fs-tools              # also enable file read/write/edit tools
+codebeacon serve --root /path/to/project # override workspace root
 ```
 
 ---
@@ -250,25 +253,29 @@ Each repo keeps its own `.codeindex/` and is indexed independently. In multi-rep
 
 ### Code context tools (always available)
 
+All tools accept an optional `repo` argument to scope the operation to a single repo in multi-repo workspaces.
+
 | Tool | Description |
 |---|---|
-| `get_context` | Relevance-sorted index for the workspace. Returns all repos in multi-repo mode; use `repo` to filter. |
-| `drill_package(name)` | Full symbol list for a package. Use `repo/package` notation in multi-repo workspaces. |
-| `find_references(symbol)` | All locations where a symbol is used, across all repos. |
-| `find_definition(symbol)` | Definition location and signature. |
-| `get_dependents(file)` | Files that depend on this file — "what breaks if I change this?" |
-| `init_workspace` | Build (or rebuild) the code index. Called automatically when no index exists yet. |
+| `get_context(repo?)` | Relevance-sorted index for the workspace. Returns all repos in multi-repo mode; use `repo` to filter. |
+| `drill_package(name, repo?)` | Full symbol list for a package. Use `repo/package` notation in multi-repo workspaces. |
+| `find_references(symbol, repo?)` | All locations where a symbol is used, across all repos. |
+| `find_definition(symbol, repo?)` | Definition location and signature. |
+| `get_dependents(file, repo?)` | Files that depend on this file — "what breaks if I change this?" |
+| `init_workspace(repo?)` | Build (or rebuild) the code index. Called automatically when no index exists yet. Use `repo` to index a single repo in a multi-repo workspace. |
 
 ### File-system tools (`--fs-tools` flag required)
 
 These tools are **disabled by default**. Enable them with `codebeacon serve --fs-tools` for environments where the AI model has no native file access (e.g. LM Studio with a local model).
 
+All file-system tools accept an optional `repo` argument in multi-repo workspaces. When multiple repos exist, write/edit operations require `repo` to be specified.
+
 | Tool | Description |
 |---|---|
-| `read_file(path)` | Read the contents of a file. |
-| `write_file(path, content)` | Create or overwrite a file. Creates parent directories as needed. |
-| `edit_file(path, old_string, new_string)` | Replace the first occurrence of `old_string` in a file. Fails if not found. |
-| `list_directory(path?)` | List files and subdirectories at a path (defaults to repo root). |
+| `read_file(path, repo?)` | Read the contents of a file. |
+| `write_file(path, content, repo?)` | Create or overwrite a file. Creates parent directories as needed. |
+| `edit_file(path, old_string, new_string, repo?)` | Replace the first occurrence of `old_string` in a file. Fails if not found. |
+| `list_directory(path?, repo?)` | List files and subdirectories at a path (defaults to repo root). |
 
 All file-system operations are sandboxed to the configured repo roots — path traversal attempts are rejected.
 
@@ -279,11 +286,13 @@ All file-system operations are sandboxed to the configured repo roots — path t
 If you start `codebeacon serve` without running `codebeacon init` first, the AI will see a prompt the first time it calls `get_context`:
 
 ```
-No index found for 'myproject'.
+No index found for repo 'myproject'.
 Call `init_workspace` to build the index (may take a moment for large repos).
 ```
 
 The AI will ask you for confirmation, then call `init_workspace` to build the index automatically. No CLI step required.
+
+In multi-repo workspaces, pass `repo` to `init_workspace` to index a single repo, or omit it to index all repos at once.
 
 ---
 
@@ -315,6 +324,36 @@ For a directory containing multiple git repos, Codebeacon serves all of them as 
 ```
 
 `graph.bin` is written on every update. On restart, Codebeacon re-indexes only files changed since the last write — no full re-index needed.
+
+---
+
+## Configuration File
+
+Place a `.codeindex.toml` at the repo root to customise indexing behaviour:
+
+```toml
+# Additional directories to skip during indexing
+extra_ignore_dirs = ["my_build", "tmp"]
+
+# Glob patterns for files to ignore
+ignore_globs = ["**/*.generated.cs"]
+
+# If set, only these languages are indexed (case-insensitive)
+languages = ["rust", "go"]
+
+# LSP worker pool size per language (default: 2)
+lsp_concurrency = 4
+
+# Seconds to spend enriching the heuristic index with LSP definition calls
+# to discover additional dependency edges (default: 60, set 0 to disable)
+lsp_enrich_timeout_secs = 30
+
+[lsp]
+# Override LSP binary per language (e.g. use OmniSharp instead of csharp-ls)
+overrides = { csharp = "OmniSharp" }
+```
+
+All fields are optional. Without this file, Codebeacon uses sensible defaults.
 
 ---
 

@@ -8,7 +8,7 @@ fn fixture_root() -> &'static Path {
 #[test]
 fn full_index_creates_codeindex_dir() {
     let root = fixture_root();
-    let indexer = Indexer::new(root);
+    let mut indexer = Indexer::new(root);
 
     let _ = indexer.full_index();
 
@@ -22,7 +22,7 @@ fn index_json_contains_packages() {
     let root = fixture_root();
     let codeindex = root.join(".codeindex");
     if !codeindex.join("index.json").exists() {
-        let indexer = Indexer::new(root);
+        let mut indexer = Indexer::new(root);
         let _ = indexer.full_index();
     }
 
