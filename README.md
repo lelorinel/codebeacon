@@ -23,6 +23,8 @@ Existing approaches have real gaps:
 | node_modules / vendor / build dirs indexed | ✅ auto-skip + .gitignore respected |
 | Changes missed while daemon is offline | ✅ catch-up index on restart |
 | "What breaks if I change this file?" | ✅ BFS on dependency graph |
+| Multiple repos in one workspace | ✅ multi-repo workspace support |
+| Local models without native file tools | ✅ optional file-system tools via `--fs-tools` |
 
 ---
 
@@ -33,7 +35,7 @@ Existing approaches have real gaps:
 1. **FSWatcher** detects file changes with 100ms debounce
 2. **Extractor** parses symbols from source code line-by-line with regex (no LSP needed)
 3. **Indexer** writes a hierarchical `.codeindex/` and updates a petgraph dependency graph
-4. **MCP Server** exposes 5 tools for AI to query on demand
+4. **MCP Server** exposes tools for AI to query on demand
 
 The AI loads `index.json` (~500 tokens) at session start. When it needs more, it drills down — no more grep loops.
 
@@ -99,8 +101,10 @@ cargo build --release
 ```bash
 cd your-project
 codebeacon init
-# Indexed 445 files → .codeindex/
+# Index written to /your-project/.codeindex/
 ```
+
+You can skip this step — if no index exists when the MCP server starts, the `init_workspace` tool lets the AI build it on demand.
 
 ### Start the daemon + MCP server
 
@@ -108,7 +112,11 @@ codebeacon init
 codebeacon serve
 ```
 
-### Claude Code integration
+---
+
+## Client Integration
+
+### Claude Code
 
 Add to your project's `.mcp.json`:
 
@@ -123,36 +131,175 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-*If installed via `npx`, use `"command": "npx"` and `"args": ["codebeacon", "serve"]` instead.*
-
 Or via CLI:
 
 ```bash
 claude mcp add codebeacon -- codebeacon serve
 ```
 
-Claude Code starts `codebeacon serve` automatically when the session opens. The daemon catches up any changes made while it was offline.
+Claude Code automatically sets `CLAUDE_PROJECT_DIR` when launching the server, so Codebeacon finds your project without any `--root` argument.
+
+### Cursor
+
+```json
+{
+  "mcpServers": {
+    "codebeacon": {
+      "command": "codebeacon",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Cursor sets `CURSOR_WORKSPACE` automatically. No `--root` needed.
+
+### VS Code, Zed, Cline
+
+These clients launch MCP servers with `cwd` set to the workspace folder, so Codebeacon auto-detects the project root with no extra configuration.
+
+```json
+{
+  "mcpServers": {
+    "codebeacon": {
+      "command": "codebeacon",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+### LM Studio and other local AI environments
+
+Use `--fs-tools` to enable file read/write/edit tools for models that lack native file access.
+`--root` is also required since LM Studio does not set workspace environment variables automatically:
+
+```json
+{
+  "mcpServers": {
+    "codebeacon": {
+      "command": "codebeacon",
+      "args": ["serve", "--fs-tools", "--root", "/path/to/your/project"]
+    }
+  }
+}
+```
+
+#### Getting local models to use the tools
+
+Unlike Claude Code, local models are not trained to call MCP tools automatically. Without guidance they will answer from their training data and ignore the tools entirely.
+
+**Option 1 — System prompt (recommended).** In LM Studio go to **Settings → Model → System Prompt** and add:
+
+```
+You have access to codebeacon MCP tools for exploring this codebase.
+ALWAYS use them instead of guessing from memory:
+
+- get_context       → call this first to understand the project structure
+- drill_package     → full file and symbol list for a package
+- find_definition   → locate where a symbol is defined
+- find_references   → find all usages of a symbol
+- get_dependents    → what breaks if this file changes
+- read_file         → read a source file
+
+Never answer code questions without calling at least get_context first.
+```
+
+**Option 2 — Mention the tool in your query.** If you don't want to change the system prompt, be explicit in every message:
+
+```
+Use get_context to find the Rust microservice in this project and explain what it does.
+```
+
+### Manual root override
+
+If auto-detection doesn't work in your environment:
+
+```bash
+codebeacon serve --root /path/to/your/project
+```
+
+---
+
+## Multi-Repo Workspaces
+
+Codebeacon can serve multiple git repos from a single server instance. Point `--root` at a directory that contains several repos:
+
+```
+workspace/
+  api/       ← git repo
+  frontend/  ← git repo
+  infra/     ← git repo
+```
+
+```bash
+codebeacon serve --root workspace/
+# codebeacon workspace: 3 repo(s) selected
+#   repo: /workspace/api
+#   repo: /workspace/frontend
+#   repo: /workspace/infra
+```
+
+Each repo keeps its own `.codeindex/` and is indexed independently. In multi-repo mode, tool responses prefix paths with the repo name (`api/src/main.rs`) and accept an optional `repo` argument to scope queries to a single repo.
+
+**Single-repo output is unchanged** — the multi-repo envelope only appears when more than one repo is active.
 
 ---
 
 ## MCP Tools
 
-4 tool calls replaces 15+ grep+read cycles:
-
-```
-1. get_context(["auth/login.rs"])   ← what am I working with?
-2. drill_package("db")              ← dependency I care about
-3. find_references("find_user")     ← who calls this?
-4. get_dependents("auth/login.rs")  ← what would I break?
-```
+### Code context tools (always available)
 
 | Tool | Description |
 |---|---|
-| `get_context(files)` | Returns relevance-sorted index for currently open files |
-| `drill_package(name)` | Full symbol list for a package |
-| `find_references(symbol)` | All locations where a symbol is used |
-| `find_definition(symbol)` | Definition location and signature |
-| `get_dependents(file)` | Files that depend on this file — "what breaks?" |
+| `get_context` | Relevance-sorted index for the workspace. Returns all repos in multi-repo mode; use `repo` to filter. |
+| `drill_package(name)` | Full symbol list for a package. Use `repo/package` notation in multi-repo workspaces. |
+| `find_references(symbol)` | All locations where a symbol is used, across all repos. |
+| `find_definition(symbol)` | Definition location and signature. |
+| `get_dependents(file)` | Files that depend on this file — "what breaks if I change this?" |
+| `init_workspace` | Build (or rebuild) the code index. Called automatically when no index exists yet. |
+
+### File-system tools (`--fs-tools` flag required)
+
+These tools are **disabled by default**. Enable them with `codebeacon serve --fs-tools` for environments where the AI model has no native file access (e.g. LM Studio with a local model).
+
+| Tool | Description |
+|---|---|
+| `read_file(path)` | Read the contents of a file. |
+| `write_file(path, content)` | Create or overwrite a file. Creates parent directories as needed. |
+| `edit_file(path, old_string, new_string)` | Replace the first occurrence of `old_string` in a file. Fails if not found. |
+| `list_directory(path?)` | List files and subdirectories at a path (defaults to repo root). |
+
+All file-system operations are sandboxed to the configured repo roots — path traversal attempts are rejected.
+
+---
+
+## On-demand indexing
+
+If you start `codebeacon serve` without running `codebeacon init` first, the AI will see a prompt the first time it calls `get_context`:
+
+```
+No index found for 'myproject'.
+Call `init_workspace` to build the index (may take a moment for large repos).
+```
+
+The AI will ask you for confirmation, then call `init_workspace` to build the index automatically. No CLI step required.
+
+---
+
+## Workspace root auto-detection
+
+Codebeacon resolves the project root in this order:
+
+| Priority | Source |
+|---|---|
+| 1 | `--root` CLI flag |
+| 2 | MCP `roots/list` request to the client (standard MCP protocol) |
+| 3 | `CLAUDE_PROJECT_DIR` env var (Claude Code) |
+| 4 | `CURSOR_WORKSPACE` env var (Cursor) |
+| 5 | Process `cwd` (VS Code, Zed, Cline — they set this to the workspace folder) |
+
+For a directory containing multiple git repos, Codebeacon serves all of them as a workspace. For a single git repo (or a path inside one), it serves that repo alone.
 
 ---
 
