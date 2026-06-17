@@ -3,6 +3,7 @@ mod config_file;
 mod daemon;
 mod extractor;
 mod graph;
+mod imports;
 mod indexer;
 mod lsp;
 mod mcp;
@@ -49,7 +50,7 @@ async fn main() -> Result<()> {
             let repos = resolve_roots(root)?;
             for repo in &repos {
                 tracing::info!("Indexing repo: {}", repo.display());
-                let indexer = indexer::Indexer::new(repo);
+                let mut indexer = indexer::Indexer::new(repo);
                 indexer.full_index()?;
                 println!("Index written to {}/.codeindex/", repo.display());
             }

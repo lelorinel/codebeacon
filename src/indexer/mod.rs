@@ -6,12 +6,13 @@ use crate::config_file::CodeIndexConfig;
 use crate::graph::DependencyGraph;
 use crate::graph::bfs::score_files;
 use crate::graph::persistence;
+use crate::imports::{extract_imports, resolve_imports};
 use crate::indexer::package::{group_into_packages, hot_symbols};
 use crate::indexer::writer::{write_index, write_package};
 use crate::types::{FileEntry, PackageSummary, RepoIndex};
 use anyhow::Result;
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub static DEFAULT_IGNORE_DIRS: &[&str] = &[
@@ -88,7 +89,7 @@ impl Indexer {
         entries
     }
 
-    pub fn rebuild_index_from_map(&self, map: &HashMap<PathBuf, FileEntry>) -> Result<()> {
+    pub fn rebuild_index_from_map(&mut self, map: &HashMap<PathBuf, FileEntry>) -> Result<()> {
         let entries: Vec<FileEntry> = map.values().cloned().collect();
         self.rebuild_index(entries)
     }
@@ -111,7 +112,8 @@ impl Indexer {
         entries
     }
 
-    fn rebuild_index(&self, files: Vec<FileEntry>) -> Result<()> {
+    fn rebuild_index(&mut self, mut files: Vec<FileEntry>) -> Result<()> {
+        self.resolve_dependencies(&mut files);
         let codeindex = codeindex_dir(&self.repo_root);
         let packages = group_into_packages(files);
 
@@ -205,12 +207,130 @@ impl Indexer {
         Ok(())
     }
 
+    /// Populate `depends_on` / `depended_by` on each `FileEntry` and rebuild
+    /// `self.graph` from scratch using heuristic import resolution.
+    fn resolve_dependencies(&mut self, entries: &mut Vec<FileEntry>) {
+        // Build a lookup of all known repo-relative paths.
+        let known: HashSet<PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
+
+        // Pass 1: fill depends_on for every file.
+        for entry in entries.iter_mut() {
+            let abs = self.repo_root.join(&entry.path);
+            let lang = match detect_language(&abs) {
+                Some(l) => l,
+                None => continue,
+            };
+            let raw = extract_imports(&abs);
+            let resolved = resolve_imports(&self.repo_root, &entry.path, &raw, &lang, &known);
+            entry.depends_on = resolved
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+        }
+
+        // Pass 2: build reverse map for depended_by.
+        // Map from target path string → list of dependents.
+        let mut reverse: HashMap<String, Vec<String>> = HashMap::new();
+        for entry in entries.iter() {
+            for dep in &entry.depends_on {
+                reverse
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(entry.path.to_string_lossy().into_owned());
+            }
+        }
+        for entry in entries.iter_mut() {
+            let key = entry.path.to_string_lossy().into_owned();
+            entry.depended_by = reverse.get(&key).cloned().unwrap_or_default();
+        }
+
+        // Pass 3: rebuild DependencyGraph from the resolved edges.
+        let mut graph = DependencyGraph::new();
+        for entry in entries.iter() {
+            for dep in &entry.depends_on {
+                graph.add_dependency(&entry.path, &PathBuf::from(dep));
+            }
+        }
+        self.graph = graph;
+    }
+
+    /// Rebuild `FileEntry.depends_on` / `depended_by` fields from `self.graph`
+    /// (which may contain LSP-enriched edges) and rewrite package JSON files.
+    /// Does NOT re-run import extraction or replace the graph.
+    pub fn sync_entries_from_graph(&self) -> Result<()> {
+        let mut entries = self.load_all_entries();
+
+        // Rebuild depends_on from graph forward edges
+        for entry in entries.iter_mut() {
+            let mut deps: Vec<String> = self.graph
+                .neighbors(&entry.path)
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            deps.sort();
+            deps.dedup();
+            entry.depends_on = deps;
+        }
+
+        // Rebuild depended_by from reverse
+        let mut reverse: HashMap<String, Vec<String>> = HashMap::new();
+        for entry in &entries {
+            for dep in &entry.depends_on {
+                reverse
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(entry.path.to_string_lossy().into_owned());
+            }
+        }
+        for entry in entries.iter_mut() {
+            let key = entry.path.to_string_lossy().into_owned();
+            let mut rev = reverse.get(&key).cloned().unwrap_or_default();
+            rev.sort();
+            rev.dedup();
+            entry.depended_by = rev;
+        }
+
+        let codeindex = codeindex_dir(&self.repo_root);
+        let packages = group_into_packages(entries);
+
+        let scores = score_files(&self.graph, &[]);
+        let mut summaries: Vec<PackageSummary> = packages.iter().map(|p| {
+            let avg_score: f32 = if p.files.is_empty() { 0.1 } else {
+                p.files.iter().map(|f| {
+                    let abs = self.repo_root.join(&f.path);
+                    scores.get(&abs).copied().unwrap_or(0.1)
+                }).sum::<f32>() / p.files.len() as f32
+            };
+            PackageSummary {
+                name: p.name.clone(),
+                purpose: String::new(),
+                files: p.files.len(),
+                score: avg_score,
+            }
+        }).collect();
+        summaries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        summaries.retain(|s| s.score >= 0.05);
+        let hot = hot_symbols(&packages, 10);
+        let repo_name = self.repo_root.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "repo".into());
+        let index = RepoIndex {
+            repo: repo_name,
+            generated_at: Utc::now().to_rfc3339(),
+            packages: summaries,
+            hot_symbols: hot,
+        };
+        write_index(&index, &codeindex)?;
+        for pkg in &packages { write_package(pkg, &codeindex)?; }
+        Ok(())
+    }
+
     pub fn save_graph(&self) -> Result<()> {
         let path = codeindex_dir(&self.repo_root).join("graph.bin");
         persistence::save(&self.graph, &path)
     }
 
-    pub fn full_index(&self) -> Result<()> {
+    pub fn full_index(&mut self) -> Result<()> {
         let files = self.collect_source_files()?;
         tracing::info!("Indexing {} files", files.len());
 
@@ -327,5 +447,128 @@ mod tests {
         indexer.index_file_no_lsp(&file, vec![]).unwrap();
 
         assert!(repo_root.join(".codeindex/index.json").exists());
+    }
+
+    fn make_rust_repo(root: &Path) {
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub mod auth;\npub mod db;\n").unwrap();
+        fs::write(root.join("src/auth.rs"), "pub fn login() {}").unwrap();
+        fs::write(root.join("src/db.rs"), "pub struct User {}").unwrap();
+    }
+
+    #[test]
+    fn full_index_populates_depends_on() {
+        let tmp = TempDir::new().unwrap();
+        make_rust_repo(tmp.path());
+
+        let mut indexer = Indexer::new(tmp.path());
+        indexer.full_index().unwrap();
+
+        let entries = indexer.load_all_entries();
+        let lib = entries.iter().find(|e| e.path == PathBuf::from("src/lib.rs")).unwrap();
+        assert!(
+            lib.depends_on.contains(&"src/auth.rs".to_string()),
+            "lib.rs should depend on auth.rs, got: {:?}", lib.depends_on
+        );
+        assert!(
+            lib.depends_on.contains(&"src/db.rs".to_string()),
+            "lib.rs should depend on db.rs, got: {:?}", lib.depends_on
+        );
+    }
+
+    #[test]
+    fn full_index_populates_depended_by() {
+        let tmp = TempDir::new().unwrap();
+        make_rust_repo(tmp.path());
+
+        let mut indexer = Indexer::new(tmp.path());
+        indexer.full_index().unwrap();
+
+        let entries = indexer.load_all_entries();
+        let auth = entries.iter().find(|e| e.path == PathBuf::from("src/auth.rs")).unwrap();
+        assert!(
+            auth.depended_by.contains(&"src/lib.rs".to_string()),
+            "auth.rs should be depended on by lib.rs, got: {:?}", auth.depended_by
+        );
+    }
+
+    #[test]
+    fn full_index_populates_graph_edges() {
+        let tmp = TempDir::new().unwrap();
+        make_rust_repo(tmp.path());
+
+        let mut indexer = Indexer::new(tmp.path());
+        indexer.full_index().unwrap();
+
+        assert!(
+            indexer.graph.has_dependency(
+                &PathBuf::from("src/lib.rs"),
+                &PathBuf::from("src/auth.rs"),
+            ),
+            "graph should have lib.rs → auth.rs edge"
+        );
+        assert!(
+            indexer.graph.has_dependency(
+                &PathBuf::from("src/lib.rs"),
+                &PathBuf::from("src/db.rs"),
+            ),
+            "graph should have lib.rs → db.rs edge"
+        );
+    }
+
+    #[test]
+    fn graph_reverse_neighbors_returns_dependents() {
+        let tmp = TempDir::new().unwrap();
+        make_rust_repo(tmp.path());
+
+        let mut indexer = Indexer::new(tmp.path());
+        indexer.full_index().unwrap();
+
+        let dependents = indexer.graph.reverse_neighbors(&PathBuf::from("src/auth.rs"));
+        assert!(
+            dependents.contains(&PathBuf::from("src/lib.rs")),
+            "reverse neighbors of auth.rs should include lib.rs, got: {:?}", dependents
+        );
+    }
+
+    #[test]
+    fn sync_entries_from_graph_persists_manually_added_edge() {
+        let tmp = TempDir::new().unwrap();
+        // lib.rs has no imports — so heuristic depends_on will be empty
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("src/lib.rs"), "// no imports\n").unwrap();
+        fs::write(tmp.path().join("src/auth.rs"), "pub fn login() {}").unwrap();
+
+        let mut indexer = Indexer::new(tmp.path());
+        indexer.full_index().unwrap();
+
+        // Verify heuristic left depends_on empty
+        let entries = indexer.load_all_entries();
+        let lib = entries.iter().find(|e| e.path == PathBuf::from("src/lib.rs")).unwrap();
+        assert!(lib.depends_on.is_empty(), "heuristic should find no deps");
+
+        // Simulate LSP discovering a new edge
+        indexer.graph.add_dependency(
+            &PathBuf::from("src/lib.rs"),
+            &PathBuf::from("src/auth.rs"),
+        );
+        indexer.save_graph().unwrap();
+
+        // sync_entries_from_graph should write the edge to the FileEntry JSON
+        indexer.sync_entries_from_graph().unwrap();
+
+        let entries = indexer.load_all_entries();
+        let lib = entries.iter().find(|e| e.path == PathBuf::from("src/lib.rs")).unwrap();
+        assert!(
+            lib.depends_on.contains(&"src/auth.rs".to_string()),
+            "after sync, depends_on should contain auth.rs, got: {:?}", lib.depends_on
+        );
+        let auth = entries.iter().find(|e| e.path == PathBuf::from("src/auth.rs")).unwrap();
+        assert!(
+            auth.depended_by.contains(&"src/lib.rs".to_string()),
+            "after sync, auth.rs.depended_by should contain lib.rs, got: {:?}", auth.depended_by
+        );
     }
 }

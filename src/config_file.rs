@@ -19,11 +19,17 @@ pub struct CodeIndexConfig {
     #[serde(default = "default_lsp_concurrency")]
     pub lsp_concurrency: usize,
 
+    /// Seconds to spend enriching the heuristic index with LSP data in the
+    /// background daemon. Set to 0 to disable LSP enrichment entirely. (default 60)
+    #[serde(default = "default_lsp_enrich_timeout_secs")]
+    pub lsp_enrich_timeout_secs: u64,
+
     #[serde(default)]
     pub lsp: LspConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
+fn default_lsp_enrich_timeout_secs() -> u64 { 60 }
 
 impl Default for CodeIndexConfig {
     fn default() -> Self {
@@ -32,6 +38,7 @@ impl Default for CodeIndexConfig {
             ignore_globs: Vec::new(),
             languages: Vec::new(),
             lsp_concurrency: default_lsp_concurrency(),
+            lsp_enrich_timeout_secs: default_lsp_enrich_timeout_secs(),
             lsp: LspConfig::default(),
         }
     }
@@ -69,6 +76,7 @@ mod tests {
         assert!(cfg.ignore_globs.is_empty());
         assert!(cfg.languages.is_empty());
         assert_eq!(cfg.lsp_concurrency, 2);
+        assert_eq!(cfg.lsp_enrich_timeout_secs, 60);
         assert!(cfg.lsp.overrides.is_empty());
     }
 
