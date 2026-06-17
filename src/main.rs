@@ -42,6 +42,11 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Handle --version manually (clap doesn't auto-add it with subcommands)
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("codebeacon {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
@@ -89,7 +94,7 @@ fn resolve_roots(override_path: Option<PathBuf>) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn cli_help_exits_cleanly() {
+    fn cli_has_expected_subcommands() {
         use clap::CommandFactory;
         let cmd = super::Cli::command();
         assert!(cmd.get_subcommands().any(|s| s.get_name() == "init"));
