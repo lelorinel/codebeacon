@@ -51,68 +51,144 @@ pub fn text_content(text: impl Into<String>) -> Value {
     })
 }
 
-pub fn tool_list() -> Value {
-    serde_json::json!({
-        "tools": [
-            {
-                "name": "get_context",
-                "description": "Returns relevance-sorted code index for given open files",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "files": { "type": "array", "items": { "type": "string" } }
-                    },
-                    "required": ["files"]
-                }
-            },
-            {
-                "name": "drill_package",
-                "description": "Returns detailed file and symbol listing for a package",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "name": { "type": "string" } },
-                    "required": ["name"]
-                }
-            },
-            {
-                "name": "find_references",
-                "description": "Find all usages of a symbol across the codebase",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "symbol": { "type": "string" },
-                        "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
-                        "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
-                        "character": { "type": "integer", "description": "0-based character offset (required with file)" }
-                    },
-                    "required": ["symbol"]
-                }
-            },
-            {
-                "name": "find_definition",
-                "description": "Find where a symbol is defined",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "symbol": { "type": "string" },
-                        "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
-                        "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
-                        "character": { "type": "integer", "description": "0-based character offset (required with file)" }
-                    },
-                    "required": ["symbol"]
-                }
-            },
-            {
-                "name": "get_dependents",
-                "description": "List files that depend on the given file",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "file": { "type": "string" } },
-                    "required": ["file"]
-                }
+pub fn tool_list(fs_tools: bool) -> Value {
+    let mut tools = vec![
+        serde_json::json!({
+            "name": "get_context",
+            "description": "Returns relevance-sorted code index. In a multi-repo workspace returns all repos; use `repo` to filter to one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "files": { "type": "array", "items": { "type": "string" } },
+                    "repo": { "type": "string", "description": "Repo name to query (only needed in a multi-repo workspace)" }
+                },
+                "required": []
             }
-        ]
-    })
+        }),
+        serde_json::json!({
+            "name": "drill_package",
+            "description": "Returns detailed file and symbol listing for a package. Use 'repo/package' notation or the `repo` argument in multi-repo workspaces.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Package name, or 'repo/package' in a multi-repo workspace" },
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                },
+                "required": ["name"]
+            }
+        }),
+        serde_json::json!({
+            "name": "find_references",
+            "description": "Find all usages of a symbol across the codebase (all repos by default; use `repo` to scope to one).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "symbol": { "type": "string" },
+                    "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
+                    "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
+                    "character": { "type": "integer", "description": "0-based character offset (required with file)" },
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                },
+                "required": ["symbol"]
+            }
+        }),
+        serde_json::json!({
+            "name": "find_definition",
+            "description": "Find where a symbol is defined (all repos by default; use `repo` to scope to one).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "symbol": { "type": "string" },
+                    "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
+                    "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
+                    "character": { "type": "integer", "description": "0-based character offset (required with file)" },
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                },
+                "required": ["symbol"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_dependents",
+            "description": "List files that depend on the given file (all repos by default; use 'repo/path' notation or the `repo` argument to scope).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "File path, or 'repo/path' in a multi-repo workspace" },
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                },
+                "required": ["file"]
+            }
+        }),
+        serde_json::json!({
+            "name": "init_workspace",
+            "description": "Build (or rebuild) the code index for the workspace. Call this when get_context reports that no index exists yet.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repo": { "type": "string", "description": "Repo name to index (only needed in a multi-repo workspace; omit to index all repos)" }
+                },
+                "required": []
+            }
+        }),
+    ];
+
+    if fs_tools {
+        tools.extend([
+            serde_json::json!({
+                "name": "read_file",
+                "description": "Read the contents of a file in the workspace.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path relative to the repo root (or absolute)" },
+                        "repo": { "type": "string", "description": "Repo name (only needed in a multi-repo workspace)" }
+                    },
+                    "required": ["path"]
+                }
+            }),
+            serde_json::json!({
+                "name": "write_file",
+                "description": "Create or overwrite a file in the workspace. Creates parent directories if needed.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path":    { "type": "string", "description": "Path relative to the repo root" },
+                        "content": { "type": "string", "description": "Full file content to write" },
+                        "repo":    { "type": "string", "description": "Repo name (required if multiple repos in workspace)" }
+                    },
+                    "required": ["path", "content"]
+                }
+            }),
+            serde_json::json!({
+                "name": "edit_file",
+                "description": "Replace the first occurrence of old_string with new_string in a file. Fails if old_string is not found — make sure it matches the file exactly.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path":       { "type": "string", "description": "Path relative to the repo root" },
+                        "old_string": { "type": "string", "description": "Exact string to find in the file" },
+                        "new_string": { "type": "string", "description": "Replacement string" },
+                        "repo":       { "type": "string", "description": "Repo name (required if multiple repos in workspace)" }
+                    },
+                    "required": ["path", "old_string", "new_string"]
+                }
+            }),
+            serde_json::json!({
+                "name": "list_directory",
+                "description": "List files and subdirectories at a path in the workspace.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Directory path relative to the repo root (defaults to repo root)" },
+                        "repo": { "type": "string", "description": "Repo name (only needed in a multi-repo workspace)" }
+                    },
+                    "required": []
+                }
+            }),
+        ]);
+    }
+
+    serde_json::json!({ "tools": tools })
 }
 
 #[cfg(test)]

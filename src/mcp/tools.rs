@@ -5,17 +5,21 @@ use crate::lsp::pool::LspPool;
 use crate::mcp::protocol::text_content;
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::sync::Mutex;
 
-pub struct ToolContext {
-    pub repo_root: PathBuf,
+/// Per-repo context: index root, LSP pool, and a short display name.
+pub struct RepoCtx {
+    /// Short name used in multi-repo output prefixes (directory basename).
+    pub name: String,
+    /// Absolute path to the repo root (where `.codeindex/` lives).
+    pub root: PathBuf,
     pub lsp_pool: Mutex<LspPool>,
 }
 
-impl ToolContext {
+impl RepoCtx {
     fn codeindex(&self) -> PathBuf {
-        codeindex_dir(&self.repo_root)
+        codeindex_dir(&self.root)
     }
 
     fn load_graph(&self) -> DependencyGraph {
@@ -24,190 +28,230 @@ impl ToolContext {
     }
 }
 
+/// Tool context handed to every MCP tool handler.
+///
+/// Single-repo: `repos` has one element; output format is identical to the
+/// original single-root behaviour (no repo prefix, no wrapping object).
+///
+/// Multi-repo: `repos` has N>1 elements; file paths in output are prefixed with
+/// `"repo_name/"` and `get_context` returns a `{ repos: [...] }` envelope.
+pub struct ToolContext {
+    pub repos: Vec<RepoCtx>,
+    /// When false, file-system tools (read_file, write_file, edit_file,
+    /// list_directory) are disabled. Enable with `codebeacon serve --fs-tools`.
+    pub fs_tools: bool,
+}
+
+impl ToolContext {
+    /// Returns the repos that match an optional `repo` name filter.
+    /// With no filter all repos are returned.
+    fn repos_for<'a>(&'a self, filter: Option<&str>) -> Vec<&'a RepoCtx> {
+        match filter {
+            Some(name) => self.repos.iter().filter(|r| r.name == name).collect(),
+            None => self.repos.iter().collect(),
+        }
+    }
+
+    /// True when serving more than one repo (multi-repo workspace mode).
+    fn multi(&self) -> bool {
+        self.repos.len() > 1
+    }
+}
+
 pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
     match name {
-        "get_context"     => handle_get_context(ctx, args),
-        "drill_package"   => handle_drill_package(ctx, args),
-        "find_references" => handle_find_references(ctx, args),
-        "find_definition" => handle_find_definition(ctx, args),
-        "get_dependents"  => handle_get_dependents(ctx, args),
+        "get_context"      => handle_get_context(ctx, args),
+        "drill_package"    => handle_drill_package(ctx, args),
+        "find_references"  => handle_find_references(ctx, args),
+        "find_definition"  => handle_find_definition(ctx, args),
+        "get_dependents"   => handle_get_dependents(ctx, args),
+        "init_workspace"   => handle_init_workspace(ctx, args),
+        "read_file" | "write_file" | "edit_file" | "list_directory" => {
+            if !ctx.fs_tools {
+                anyhow::bail!(
+                    "File-system tools are disabled. \
+                     Restart codebeacon with `--fs-tools` to enable them."
+                );
+            }
+            match name {
+                "read_file"      => handle_read_file(ctx, args),
+                "write_file"     => handle_write_file(ctx, args),
+                "edit_file"      => handle_edit_file(ctx, args),
+                "list_directory" => handle_list_directory(ctx, args),
+                _ => unreachable!(),
+            }
+        }
         other => anyhow::bail!("unknown tool: {other}"),
     }
 }
 
-pub fn handle_get_context(ctx: &ToolContext, _args: &Value) -> Result<Value> {
-    let index = read_index(&ctx.codeindex())?
-        .context("No .codeindex/ found — run `codebeacon init` first")?;
-    Ok(text_content(serde_json::to_string_pretty(&index)?))
+// ---------------------------------------------------------------------------
+// get_context
+// ---------------------------------------------------------------------------
+
+pub fn handle_get_context(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+
+    if repos.is_empty() {
+        let available: Vec<&str> = ctx.repos.iter().map(|r| r.name.as_str()).collect();
+        return Ok(text_content(format!(
+            "No repo named '{}' found in this workspace.\nAvailable repos: {}.\n\
+             Call get_context without the `repo` argument to see all repos.",
+            repo_filter.unwrap_or("(none)"),
+            available.join(", ")
+        )));
+    }
+
+    if repos.len() == 1 {
+        // Single repo (or filtered to one): original output format
+        let repo = repos[0];
+        match read_index(&repo.codeindex())? {
+            Some(index) => return Ok(text_content(serde_json::to_string_pretty(&index)?)),
+            None => return Ok(text_content(format!(
+                "No index found for repo '{}'.\n\
+                 Call `init_workspace` to build the index (may take a moment for large repos).",
+                repo.name
+            ))),
+        }
+    }
+
+    // Multi-repo: { repos: [ { repo, index | error }, … ] }
+    let mut all = vec![];
+    for repo in repos {
+        match read_index(&repo.codeindex())? {
+            Some(index) => all.push(serde_json::json!({
+                "repo": repo.name,
+                "index": index,
+            })),
+            None => all.push(serde_json::json!({
+                "repo": repo.name,
+                "status": "not indexed — call `init_workspace` to build the index",
+            })),
+        }
+    }
+    Ok(text_content(serde_json::to_string_pretty(
+        &serde_json::json!({ "repos": all }),
+    )?))
 }
+
+// ---------------------------------------------------------------------------
+// drill_package
+// ---------------------------------------------------------------------------
 
 pub fn handle_drill_package(ctx: &ToolContext, args: &Value) -> Result<Value> {
-    let name = args["name"].as_str().context("missing 'name'")?;
-    let pkg = read_package(name, &ctx.codeindex())?
-        .with_context(|| format!("package '{name}' not found"))?;
-    Ok(text_content(serde_json::to_string_pretty(&pkg)?))
-}
+    let raw_name = args["name"].as_str().context("missing 'name'")?;
+    let repo_filter = args["repo"].as_str();
 
-pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> {
-    let symbol = args["symbol"].as_str().context("missing 'symbol'")?;
-
-    // If caller provides file + position, use LSP for real usages
-    if let (Some(file), Some(line), Some(character)) = (
-        args["file"].as_str(),
-        args["line"].as_u64(),
-        args["character"].as_u64(),
-    ) {
-        let abs_path = if std::path::Path::new(file).is_absolute() {
-            std::path::PathBuf::from(file)
+    // Accept "repo/package" notation as an alternative to the `repo` argument
+    let (repo_hint, pkg_name): (Option<&str>, &str) =
+        if let Some(slash) = raw_name.find('/') {
+            (Some(&raw_name[..slash]), &raw_name[slash + 1..])
         } else {
-            ctx.repo_root.join(file)
+            (repo_filter, raw_name)
         };
-        if let Some(lang) = crate::config::detect_language(&abs_path) {
-            let mut pool = ctx.lsp_pool.lock().unwrap();
-            if let Some(client) = pool.get_or_start(&lang) {
-                match client.references(&abs_path, line as u32, character as u32) {
-                    Ok(result) => {
-                        let refs = crate::lsp::parser::parse_references(&result);
-                        if !refs.is_empty() {
-                            let lines: Vec<String> = refs.iter().map(|r| {
-                                let rel = r.file.strip_prefix(&ctx.repo_root).unwrap_or(&r.file);
-                                format!("{}:{}", rel.display(), r.line)
-                            }).collect();
-                            return Ok(text_content(format!(
-                                "References to '{}' (via LSP):\n{}", symbol, lines.join("\n")
-                            )));
-                        }
-                    }
-                    Err(e) => tracing::warn!("LSP references failed: {e}"),
-                }
-            }
-        }
-        // Fall through to index-based
-    }
 
-    // Try to resolve symbol position from index (auto-locate for LSP)
-    // Walk index to find the symbol's definition location
-    let packages_dir = ctx.codeindex().join("packages");
-    let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
-        .into_iter().flatten().flatten()
-        .filter_map(|e| e.path().to_str().map(str::to_string))
-        .collect();
-    pkg_files.sort();
+    let repos = ctx.repos_for(repo_hint);
+    let add_prefix = ctx.multi() && repo_hint.is_none();
 
-    // Look up symbol in index to get its position, then try LSP references
-    'outer: for pkg_path in &pkg_files {
-        if let Ok(text) = std::fs::read_to_string(pkg_path) {
-            if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
-                for file in &pkg.files {
-                    for sym in &file.symbols {
-                        if sym.name == symbol {
-                            let abs_path = ctx.repo_root.join(&file.path);
-                            if let Some(lang) = crate::config::detect_language(&abs_path) {
-                                let mut pool = ctx.lsp_pool.lock().unwrap();
-                                if let Some(client) = pool.get_or_start(&lang) {
-                                    match client.references(&abs_path, sym.line, sym.character) {
-                                        Ok(result) => {
-                                            let refs = crate::lsp::parser::parse_references(&result);
-                                            if !refs.is_empty() {
-                                                let lines: Vec<String> = refs.iter().map(|r| {
-                                                    let rel = r.file.strip_prefix(&ctx.repo_root).unwrap_or(&r.file);
-                                                    format!("{}:{}", rel.display(), r.line)
-                                                }).collect();
-                                                return Ok(text_content(format!(
-                                                    "References to '{}' (via LSP from index):\n{}", symbol, lines.join("\n")
-                                                )));
-                                            }
-                                        }
-                                        Err(e) => tracing::warn!("LSP references (auto) failed: {e}"),
-                                    }
-                                }
-                            }
-                            break 'outer;
-                        }
-                    }
-                }
-            }
+    for repo in repos {
+        if let Some(pkg) = read_package(pkg_name, &repo.codeindex())? {
+            let text = serde_json::to_string_pretty(&pkg)?;
+            return Ok(text_content(if add_prefix {
+                format!("[repo: {}]\n{}", repo.name, text)
+            } else {
+                text
+            }));
         }
     }
 
-    // Final fallback: index substring search (old behaviour, clearly labelled)
-    let mut found: Vec<String> = vec![];
-    for pkg_path in &pkg_files {
-        if let Ok(text) = std::fs::read_to_string(pkg_path) {
-            if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
-                for file in pkg.files {
-                    for sym in &file.symbols {
-                        if sym.name.contains(symbol) {
-                            found.push(format!(
-                                "{}:{} — {} [index fallback]",
-                                file.path.display(), sym.line, sym.signature
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if found.is_empty() {
-        Ok(text_content(format!("No references found for '{symbol}'")))
-    } else {
-        Ok(text_content(found.join("\n")))
-    }
+    anyhow::bail!("package '{raw_name}' not found")
 }
+
+// ---------------------------------------------------------------------------
+// find_definition
+// ---------------------------------------------------------------------------
 
 pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> {
     let symbol = args["symbol"].as_str().context("missing 'symbol'")?;
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+    let add_prefix = ctx.multi() && repo_filter.is_none();
 
-    // If caller provides file + position, try LSP first
+    // If the caller supplies file + position, try LSP first
     if let (Some(file), Some(line), Some(character)) = (
         args["file"].as_str(),
         args["line"].as_u64(),
         args["character"].as_u64(),
     ) {
-        let abs_path = if std::path::Path::new(file).is_absolute() {
-            std::path::PathBuf::from(file)
-        } else {
-            ctx.repo_root.join(file)
-        };
-        if let Some(lang) = crate::config::detect_language(&abs_path) {
-            let mut pool = ctx.lsp_pool.lock().unwrap();
-            if let Some(client) = pool.get_or_start(&lang) {
-                match client.definition(&abs_path, line as u32, character as u32) {
-                    Ok(result) => {
-                        if let Some((def_path, def_line)) = crate::lsp::parser::parse_definition(&result) {
-                            let rel = def_path.strip_prefix(&ctx.repo_root).unwrap_or(&def_path);
-                            return Ok(text_content(format!(
-                                "{}:{} (via LSP)", rel.display(), def_line
-                            )));
+        for repo in &repos {
+            let abs_path = if std::path::Path::new(file).is_absolute() {
+                std::path::PathBuf::from(file)
+            } else {
+                repo.root.join(file)
+            };
+            if !abs_path.exists() { continue; }
+            if let Some(lang) = crate::config::detect_language(&abs_path) {
+                let mut pool = repo.lsp_pool.lock().unwrap();
+                if let Some(client) = pool.get_or_start(&lang) {
+                    match client.definition(&abs_path, line as u32, character as u32) {
+                        Ok(result) => {
+                            if let Some((def_path, def_line)) =
+                                crate::lsp::parser::parse_definition(&result)
+                            {
+                                let rel = def_path.strip_prefix(&repo.root).unwrap_or(&def_path);
+                                let prefix = if add_prefix {
+                                    format!("{}/", repo.name)
+                                } else {
+                                    String::new()
+                                };
+                                return Ok(text_content(format!(
+                                    "{}{}:{} (via LSP)",
+                                    prefix,
+                                    rel.display(),
+                                    def_line
+                                )));
+                            }
                         }
+                        Err(e) => tracing::warn!("LSP definition failed: {e}"),
                     }
-                    Err(e) => tracing::warn!("LSP definition failed: {e}"),
                 }
             }
+            break; // file resolved to this repo; no need to search further
         }
-        // Fall through to index-based if LSP failed
     }
 
-    // Index-based fallback: find ALL matching symbols, sorted deterministically
-    let packages_dir = ctx.codeindex().join("packages");
+    // Index-based fallback: search all (or filtered) repos
     let mut found: Vec<String> = vec![];
-    let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
-        .into_iter().flatten().flatten()
-        .filter_map(|e| e.path().to_str().map(str::to_string))
-        .collect();
-    pkg_files.sort(); // deterministic order
+    for repo in &repos {
+        let packages_dir = repo.codeindex().join("packages");
+        let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.path().to_str().map(str::to_string))
+            .collect();
+        pkg_files.sort(); // deterministic
 
-    for pkg_path in pkg_files {
-        if let Ok(text) = std::fs::read_to_string(&pkg_path) {
-            if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
-                for file in pkg.files {
-                    for sym in &file.symbols {
-                        if sym.name == symbol {
-                            found.push(format!(
-                                "{}:{} — {}",
-                                file.path.display(), sym.line, sym.signature
-                            ));
+        for pkg_path in pkg_files {
+            if let Ok(text) = std::fs::read_to_string(&pkg_path) {
+                if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
+                    for file in pkg.files {
+                        for sym in &file.symbols {
+                            if sym.name == symbol {
+                                let prefix = if add_prefix {
+                                    format!("{}/", repo.name)
+                                } else {
+                                    String::new()
+                                };
+                                found.push(format!(
+                                    "{}{}:{} — {}",
+                                    prefix,
+                                    file.path.display(),
+                                    sym.line,
+                                    sym.signature
+                                ));
+                            }
                         }
                     }
                 }
@@ -222,28 +266,450 @@ pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> 
     }
 }
 
+// ---------------------------------------------------------------------------
+// find_references
+// ---------------------------------------------------------------------------
+
+pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let symbol = args["symbol"].as_str().context("missing 'symbol'")?;
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+    let add_prefix = ctx.multi() && repo_filter.is_none();
+
+    // If the caller supplies file + position, try LSP first
+    if let (Some(file), Some(line), Some(character)) = (
+        args["file"].as_str(),
+        args["line"].as_u64(),
+        args["character"].as_u64(),
+    ) {
+        for repo in &repos {
+            let abs_path = if std::path::Path::new(file).is_absolute() {
+                std::path::PathBuf::from(file)
+            } else {
+                repo.root.join(file)
+            };
+            if !abs_path.exists() { continue; }
+            if let Some(lang) = crate::config::detect_language(&abs_path) {
+                let mut pool = repo.lsp_pool.lock().unwrap();
+                if let Some(client) = pool.get_or_start(&lang) {
+                    match client.references(&abs_path, line as u32, character as u32) {
+                        Ok(result) => {
+                            let refs = crate::lsp::parser::parse_references(&result);
+                            if !refs.is_empty() {
+                                let lines: Vec<String> = refs
+                                    .iter()
+                                    .map(|r| {
+                                        let rel = r
+                                            .file
+                                            .strip_prefix(&repo.root)
+                                            .unwrap_or(&r.file);
+                                        let prefix = if add_prefix {
+                                            format!("{}/", repo.name)
+                                        } else {
+                                            String::new()
+                                        };
+                                        format!("{}{}:{}", prefix, rel.display(), r.line)
+                                    })
+                                    .collect();
+                                return Ok(text_content(format!(
+                                    "References to '{}' (via LSP):\n{}",
+                                    symbol,
+                                    lines.join("\n")
+                                )));
+                            }
+                        }
+                        Err(e) => tracing::warn!("LSP references failed: {e}"),
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    // Try to auto-locate the symbol's definition in the index, then use LSP
+    'outer: for repo in &repos {
+        let packages_dir = repo.codeindex().join("packages");
+        let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.path().to_str().map(str::to_string))
+            .collect();
+        pkg_files.sort();
+
+        for pkg_path in &pkg_files {
+            if let Ok(text) = std::fs::read_to_string(pkg_path) {
+                if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
+                    for file in &pkg.files {
+                        for sym in &file.symbols {
+                            if sym.name == symbol {
+                                let abs_path = repo.root.join(&file.path);
+                                if let Some(lang) = crate::config::detect_language(&abs_path) {
+                                    let mut pool = repo.lsp_pool.lock().unwrap();
+                                    if let Some(client) = pool.get_or_start(&lang) {
+                                        match client.references(
+                                            &abs_path,
+                                            sym.line,
+                                            sym.character,
+                                        ) {
+                                            Ok(result) => {
+                                                let refs =
+                                                    crate::lsp::parser::parse_references(&result);
+                                                if !refs.is_empty() {
+                                                    let lines: Vec<String> = refs
+                                                        .iter()
+                                                        .map(|r| {
+                                                            let rel = r
+                                                                .file
+                                                                .strip_prefix(&repo.root)
+                                                                .unwrap_or(&r.file);
+                                                            let prefix = if add_prefix {
+                                                                format!("{}/", repo.name)
+                                                            } else {
+                                                                String::new()
+                                                            };
+                                                            format!(
+                                                                "{}{}:{}",
+                                                                prefix,
+                                                                rel.display(),
+                                                                r.line
+                                                            )
+                                                        })
+                                                        .collect();
+                                                    return Ok(text_content(format!(
+                                                        "References to '{}' (via LSP from index):\n{}",
+                                                        symbol,
+                                                        lines.join("\n")
+                                                    )));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "LSP references (auto) failed: {e}"
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Final fallback: index substring search
+    let mut found: Vec<String> = vec![];
+    for repo in &repos {
+        let packages_dir = repo.codeindex().join("packages");
+        let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.path().to_str().map(str::to_string))
+            .collect();
+        pkg_files.sort();
+
+        for pkg_path in &pkg_files {
+            if let Ok(text) = std::fs::read_to_string(pkg_path) {
+                if let Ok(pkg) = serde_json::from_str::<crate::types::PackageDetail>(&text) {
+                    for file in pkg.files {
+                        for sym in &file.symbols {
+                            if sym.name.contains(symbol) {
+                                let prefix = if add_prefix {
+                                    format!("{}/", repo.name)
+                                } else {
+                                    String::new()
+                                };
+                                found.push(format!(
+                                    "{}{}:{} — {} [index fallback]",
+                                    prefix,
+                                    file.path.display(),
+                                    sym.line,
+                                    sym.signature
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if found.is_empty() {
+        Ok(text_content(format!("No references found for '{symbol}'")))
+    } else {
+        Ok(text_content(found.join("\n")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// get_dependents
+// ---------------------------------------------------------------------------
+
 pub fn handle_get_dependents(ctx: &ToolContext, args: &Value) -> Result<Value> {
     let file = args["file"].as_str().context("missing 'file'")?;
-    let graph = ctx.load_graph();
-    // Try absolute path first, fall back to relative path as stored in graph
-    let abs_path = ctx.repo_root.join(file);
-    let rel_path = PathBuf::from(file);
-    let dependents = {
-        let by_abs = graph.reverse_neighbors(&abs_path);
-        if !by_abs.is_empty() {
-            by_abs
+    let repo_filter = args["repo"].as_str();
+    let add_prefix = ctx.multi() && repo_filter.is_none();
+
+    // Accept "repo/path" notation — but only if the first segment matches a known repo
+    let (repo_hint, file_path): (Option<&str>, &str) = if let Some(slash) = file.find('/') {
+        let potential_repo = &file[..slash];
+        if ctx.repos.iter().any(|r| r.name == potential_repo) {
+            (Some(potential_repo), &file[slash + 1..])
         } else {
-            graph.reverse_neighbors(&rel_path)
+            (repo_filter, file)
         }
+    } else {
+        (repo_filter, file)
     };
-    if dependents.is_empty() {
-        return Ok(text_content(format!("No files depend on '{file}'")));
+
+    let repos = ctx.repos_for(repo_hint);
+    let mut all_dependents: Vec<String> = vec![];
+
+    for repo in &repos {
+        let graph = repo.load_graph();
+        let abs_path = repo.root.join(file_path);
+        let rel_path = PathBuf::from(file_path);
+        let dependents = {
+            let by_abs = graph.reverse_neighbors(&abs_path);
+            if !by_abs.is_empty() {
+                by_abs
+            } else {
+                graph.reverse_neighbors(&rel_path)
+            }
+        };
+        for p in dependents {
+            let rel = p.strip_prefix(&repo.root).unwrap_or(&p);
+            let prefix = if add_prefix {
+                format!("{}/", repo.name)
+            } else {
+                String::new()
+            };
+            all_dependents.push(format!("{}{}", prefix, rel.display()));
+        }
     }
-    let lines: Vec<String> = dependents.iter()
-        .map(|p| p.strip_prefix(&ctx.repo_root).unwrap_or(p).display().to_string())
-        .collect();
+
+    if all_dependents.is_empty() {
+        Ok(text_content(format!("No files depend on '{file}'")))
+    } else {
+        Ok(text_content(all_dependents.join("\n")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// init_workspace
+// ---------------------------------------------------------------------------
+
+/// Build (or rebuild) the `.codeindex/` for one or all repos in the workspace.
+///
+/// Intended to be called by the LLM when `get_context` reports that no index
+/// exists yet. Pass `repo` to limit indexing to a single repo.
+pub fn handle_init_workspace(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+
+    let mut lines: Vec<String> = vec![];
+    for repo in repos {
+        tracing::info!("init_workspace: indexing {}", repo.root.display());
+        match crate::indexer::Indexer::new(&repo.root).full_index() {
+            Ok(()) => lines.push(format!("'{}' indexed successfully.", repo.name)),
+            Err(e) => lines.push(format!("'{}' failed: {e}", repo.name)),
+        }
+    }
     Ok(text_content(lines.join("\n")))
 }
+
+// ---------------------------------------------------------------------------
+// File-system tools (read_file / write_file / edit_file / list_directory)
+// ---------------------------------------------------------------------------
+//
+// All operations are sandboxed to the configured repo roots.
+// Paths are normalised (resolving `..`) without requiring the file to exist,
+// then verified to be within a repo root before any I/O is performed.
+
+/// Normalise a path by resolving `.` and `..` without touching the filesystem.
+fn normalize_path(path: &std::path::Path) -> PathBuf {
+    let mut out: Vec<Component> = vec![];
+    for c in path.components() {
+        match c {
+            Component::ParentDir => { out.pop(); }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out.iter().collect()
+}
+
+/// Resolve a user-supplied path relative to `repo_root`, ensuring the result
+/// stays inside `repo_root`. Returns the absolute, normalised path on success.
+fn safe_path(repo_root: &std::path::Path, user_path: &str) -> Result<PathBuf> {
+    let abs = if std::path::Path::new(user_path).is_absolute() {
+        PathBuf::from(user_path)
+    } else {
+        repo_root.join(user_path)
+    };
+    let resolved = normalize_path(&abs);
+    if !resolved.starts_with(repo_root) {
+        anyhow::bail!(
+            "Path '{}' escapes the repo root — path traversal denied.",
+            user_path
+        );
+    }
+    Ok(resolved)
+}
+
+/// Pick a single repo for a write/edit operation.
+///
+/// Rules:
+/// - If `repo` arg given → use that repo.
+/// - If only one repo → use it.
+/// - Otherwise error: user must specify which repo to write to.
+fn single_repo_for_write<'a>(ctx: &'a ToolContext, repo_filter: Option<&str>) -> Result<&'a RepoCtx> {
+    let repos = ctx.repos_for(repo_filter);
+    match repos.len() {
+        0 => anyhow::bail!("No repo found matching filter '{}'", repo_filter.unwrap_or("(none)")),
+        1 => Ok(repos[0]),
+        _ => anyhow::bail!(
+            "Multiple repos in workspace. Use the `repo` argument to specify which one to write to."
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// read_file
+
+pub fn handle_read_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let path_str = args["path"].as_str().context("missing 'path'")?;
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+
+    // Try repos in order; return the first match that resolves safely and exists.
+    for repo in &repos {
+        let abs = match safe_path(&repo.root, path_str) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !abs.exists() { continue; }
+
+        let content = std::fs::read_to_string(&abs)
+            .with_context(|| format!("Failed to read '{}'", abs.display()))?;
+
+        let prefix = if ctx.multi() && repo_filter.is_none() {
+            format!("# {}/{}\n\n", repo.name, path_str)
+        } else {
+            format!("# {}\n\n", path_str)
+        };
+        return Ok(text_content(format!("{prefix}{content}")));
+    }
+
+    anyhow::bail!("File '{}' not found in any repo.", path_str)
+}
+
+// ---------------------------------------------------------------------------
+// write_file
+
+pub fn handle_write_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let path_str = args["path"].as_str().context("missing 'path'")?;
+    let content  = args["content"].as_str().context("missing 'content'")?;
+    let repo_filter = args["repo"].as_str();
+
+    let repo = single_repo_for_write(ctx, repo_filter)?;
+    let abs  = safe_path(&repo.root, path_str)?;
+
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directories for '{}'", abs.display()))?;
+    }
+    std::fs::write(&abs, content)
+        .with_context(|| format!("Failed to write '{}'", abs.display()))?;
+
+    Ok(text_content(format!("Written: {}/{}", repo.name, path_str)))
+}
+
+// ---------------------------------------------------------------------------
+// edit_file
+
+pub fn handle_edit_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let path_str   = args["path"].as_str().context("missing 'path'")?;
+    let old_string = args["old_string"].as_str().context("missing 'old_string'")?;
+    let new_string = args["new_string"].as_str().context("missing 'new_string'")?;
+    let repo_filter = args["repo"].as_str();
+
+    let repo = single_repo_for_write(ctx, repo_filter)?;
+    let abs  = safe_path(&repo.root, path_str)?;
+
+    let original = std::fs::read_to_string(&abs)
+        .with_context(|| format!("Failed to read '{}' for editing", abs.display()))?;
+
+    let count = original.matches(old_string).count();
+    if count == 0 {
+        anyhow::bail!(
+            "old_string not found in '{}'. Make sure it matches the file contents exactly.",
+            path_str
+        );
+    }
+
+    // Replace first occurrence
+    let updated = original.replacen(old_string, new_string, 1);
+    std::fs::write(&abs, &updated)
+        .with_context(|| format!("Failed to write edited '{}'", abs.display()))?;
+
+    let note = if count > 1 {
+        format!(" ({} occurrences found; replaced the first one)", count)
+    } else {
+        String::new()
+    };
+    Ok(text_content(format!("Edited: {}/{}{}", repo.name, path_str, note)))
+}
+
+// ---------------------------------------------------------------------------
+// list_directory
+
+pub fn handle_list_directory(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let path_str = args["path"].as_str().unwrap_or(".");
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+    let multi = ctx.multi() && repo_filter.is_none();
+
+    let mut output = vec![];
+
+    for repo in &repos {
+        let abs = safe_path(&repo.root, path_str)?;
+        if !abs.exists() { continue; }
+
+        let mut entries: Vec<String> = std::fs::read_dir(&abs)
+            .with_context(|| format!("Cannot list '{}'", abs.display()))?
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                // Skip hidden dirs and codeindex
+                if name.starts_with('.') { return None; }
+                let suffix = if e.path().is_dir() { "/" } else { "" };
+                Some(format!("{name}{suffix}"))
+            })
+            .collect();
+        entries.sort();
+
+        if multi {
+            output.push(format!("[{}]\n{}", repo.name, entries.join("\n")));
+        } else {
+            output.push(entries.join("\n"));
+        }
+    }
+
+    if output.is_empty() {
+        Ok(text_content(format!("'{}' not found or empty.", path_str)))
+    } else {
+        Ok(text_content(output.join("\n\n")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -252,21 +718,42 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    /// Build a single-repo ToolContext pointing at `tmp`.
+    fn single_ctx(tmp: &TempDir) -> ToolContext {
+        ToolContext {
+            repos: vec![RepoCtx {
+                name: "test".into(),
+                root: tmp.path().to_path_buf(),
+                lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+            }],
+            fs_tools: true,
+        }
+    }
+
     fn setup_codeindex(tmp: &TempDir) {
         use crate::indexer::writer::{write_index, write_package};
         let idx = RepoIndex {
             repo: "test".into(),
             generated_at: "2026-06-16T00:00:00Z".into(),
-            packages: vec![
-                PackageSummary { name: "auth".into(), purpose: "auth".into(), files: 1, score: 0.9 },
-            ],
+            packages: vec![PackageSummary {
+                name: "auth".into(),
+                purpose: "auth".into(),
+                files: 1,
+                score: 0.9,
+            }],
             hot_symbols: vec!["login".into()],
         };
         let pkg = PackageDetail {
             name: "auth".into(),
             files: vec![FileEntry {
                 path: PathBuf::from("src/auth.rs"),
-                symbols: vec![SymbolEntry { name: "login".into(), signature: "fn login()".into(), kind: SymbolKind::Function, line: 1, character: 0 }],
+                symbols: vec![SymbolEntry {
+                    name: "login".into(),
+                    signature: "fn login()".into(),
+                    kind: SymbolKind::Function,
+                    line: 1,
+                    character: 0,
+                }],
                 depends_on: vec![],
                 depended_by: vec![],
             }],
@@ -280,18 +767,134 @@ mod tests {
     fn get_context_returns_index_json() {
         let tmp = TempDir::new().unwrap();
         setup_codeindex(&tmp);
-        let ctx = ToolContext { repo_root: tmp.path().to_path_buf(), lsp_pool: Mutex::new(LspPool::new("file:///tmp")) };
-        let result = handle_get_context(&ctx, &serde_json::json!({"files": []})).unwrap();
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_get_context(&ctx, &serde_json::json!({"files": []})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("auth"));
+    }
+
+    #[test]
+    fn get_context_suggests_init_when_no_index() {
+        let tmp = TempDir::new().unwrap();
+        // No .codeindex created
+        let ctx = single_ctx(&tmp);
+        let result = handle_get_context(&ctx, &serde_json::json!({})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("init_workspace"), "expected init_workspace hint in: {text}");
+    }
+
+    // --- File-system tool tests ---
+
+    #[test]
+    fn read_file_returns_content() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("hello.rs"), "fn main() {}").unwrap();
+        let ctx = single_ctx(&tmp);
+        let result = handle_read_file(&ctx, &serde_json::json!({"path": "hello.rs"})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("fn main()"), "expected file content in: {text}");
+    }
+
+    #[test]
+    fn read_file_errors_for_missing_file() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = single_ctx(&tmp);
+        let result = handle_read_file(&ctx, &serde_json::json!({"path": "nonexistent.rs"}));
+        assert!(result.is_err() || {
+            let t = result.unwrap();
+            t["content"][0]["text"].as_str().unwrap().contains("not found")
+        });
+    }
+
+    #[test]
+    fn write_file_creates_file() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = single_ctx(&tmp);
+        handle_write_file(&ctx, &serde_json::json!({
+            "path": "src/new.rs",
+            "content": "pub fn greet() {}"
+        })).unwrap();
+        let written = std::fs::read_to_string(tmp.path().join("src/new.rs")).unwrap();
+        assert_eq!(written, "pub fn greet() {}");
+    }
+
+    #[test]
+    fn write_file_denied_outside_repo() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = single_ctx(&tmp);
+        let result = handle_write_file(&ctx, &serde_json::json!({
+            "path": "../../etc/passwd",
+            "content": "evil"
+        }));
+        assert!(result.is_err(), "expected path traversal to be denied");
+    }
+
+    #[test]
+    fn edit_file_replaces_string() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("lib.rs"), "fn old_name() {}").unwrap();
+        let ctx = single_ctx(&tmp);
+        handle_edit_file(&ctx, &serde_json::json!({
+            "path": "lib.rs",
+            "old_string": "old_name",
+            "new_string": "new_name"
+        })).unwrap();
+        let content = fs::read_to_string(tmp.path().join("lib.rs")).unwrap();
+        assert_eq!(content, "fn new_name() {}");
+    }
+
+    #[test]
+    fn edit_file_errors_when_old_string_not_found() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("lib.rs"), "fn hello() {}").unwrap();
+        let ctx = single_ctx(&tmp);
+        let result = handle_edit_file(&ctx, &serde_json::json!({
+            "path": "lib.rs",
+            "old_string": "nonexistent",
+            "new_string": "replacement"
+        }));
+        assert!(result.is_err(), "expected error when old_string not found");
+    }
+
+    #[test]
+    fn list_directory_returns_entries() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("README.md"), "").unwrap();
+        let ctx = single_ctx(&tmp);
+        let result = handle_list_directory(&ctx, &serde_json::json!({})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("src/"), "expected src/ dir in: {text}");
+        assert!(text.contains("README.md"), "expected README.md in: {text}");
+    }
+
+    #[test]
+    fn init_workspace_builds_index() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("src/lib.rs"), "pub fn hello() {}").unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+
+        let ctx = single_ctx(&tmp);
+        let result = handle_init_workspace(&ctx, &serde_json::json!({})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("indexed successfully"), "expected success in: {text}");
+        assert!(tmp.path().join(".codeindex/index.json").exists(), ".codeindex/index.json should exist");
     }
 
     #[test]
     fn drill_package_returns_package_detail() {
         let tmp = TempDir::new().unwrap();
         setup_codeindex(&tmp);
-        let ctx = ToolContext { repo_root: tmp.path().to_path_buf(), lsp_pool: Mutex::new(LspPool::new("file:///tmp")) };
-        let result = handle_drill_package(&ctx, &serde_json::json!({"name": "auth"})).unwrap();
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_drill_package(&ctx, &serde_json::json!({"name": "auth"})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("login"));
     }
@@ -302,8 +905,18 @@ mod tests {
             repo: "test".into(),
             generated_at: "2026-06-16T00:00:00Z".into(),
             packages: vec![
-                PackageSummary { name: "auth".into(), purpose: "auth".into(), files: 1, score: 0.9 },
-                PackageSummary { name: "api".into(), purpose: "api".into(), files: 1, score: 0.8 },
+                PackageSummary {
+                    name: "auth".into(),
+                    purpose: "auth".into(),
+                    files: 1,
+                    score: 0.9,
+                },
+                PackageSummary {
+                    name: "api".into(),
+                    purpose: "api".into(),
+                    files: 1,
+                    score: 0.8,
+                },
             ],
             hot_symbols: vec!["validate".into()],
         };
@@ -347,31 +960,30 @@ mod tests {
     fn find_definition_returns_all_matches_sorted() {
         let tmp = TempDir::new().unwrap();
         setup_codeindex_multi(&tmp);
-        let ctx = ToolContext {
-            repo_root: tmp.path().to_path_buf(),
-            lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-        };
-        let result = handle_find_definition(&ctx, &serde_json::json!({"symbol": "validate"})).unwrap();
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_find_definition(&ctx, &serde_json::json!({"symbol": "validate"}))
+                .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
-        // Both files should appear
         assert!(text.contains("src/auth.rs"), "expected auth.rs in: {text}");
         assert!(text.contains("src/api.rs"), "expected api.rs in: {text}");
-        // Lines should appear in sorted order (api.rs comes before auth.rs alphabetically)
+        // Sorted by package file path: api.rs before auth.rs alphabetically
         let auth_pos = text.find("auth.rs").unwrap();
         let api_pos = text.find("api.rs").unwrap();
-        assert!(api_pos < auth_pos, "expected api.rs to appear before auth.rs (sorted): {text}");
+        assert!(
+            api_pos < auth_pos,
+            "expected api.rs before auth.rs (sorted): {text}"
+        );
     }
 
     #[test]
     fn find_references_index_fallback() {
         let tmp = TempDir::new().unwrap();
         setup_codeindex(&tmp);
-        let ctx = ToolContext {
-            repo_root: tmp.path().to_path_buf(),
-            lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-        };
-        // No file/line/character provided — falls through to index fallback
-        let result = handle_find_references(&ctx, &serde_json::json!({"symbol": "login"})).unwrap();
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_find_references(&ctx, &serde_json::json!({"symbol": "login"}))
+                .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(
             text.contains("[index fallback]"),
@@ -384,11 +996,145 @@ mod tests {
     fn get_dependents_returns_list() {
         let tmp = TempDir::new().unwrap();
         let mut g = crate::graph::DependencyGraph::new();
-        g.add_dependency(&PathBuf::from("src/api.rs"), &PathBuf::from("src/auth.rs"));
-        crate::graph::persistence::save(&g, &tmp.path().join(".codeindex/graph.bin")).unwrap();
-        let ctx = ToolContext { repo_root: tmp.path().to_path_buf(), lsp_pool: Mutex::new(LspPool::new("file:///tmp")) };
-        let result = handle_get_dependents(&ctx, &serde_json::json!({"file": "src/auth.rs"})).unwrap();
+        g.add_dependency(
+            &PathBuf::from("src/api.rs"),
+            &PathBuf::from("src/auth.rs"),
+        );
+        crate::graph::persistence::save(
+            &g,
+            &tmp.path().join(".codeindex/graph.bin"),
+        )
+        .unwrap();
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_get_dependents(&ctx, &serde_json::json!({"file": "src/auth.rs"}))
+                .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("api.rs"));
+    }
+
+    // --- Multi-repo tests ---
+
+    #[test]
+    fn get_context_multi_repo_returns_envelope() {
+        let tmp_a = TempDir::new().unwrap();
+        let tmp_b = TempDir::new().unwrap();
+        setup_codeindex(&tmp_a);
+        setup_codeindex(&tmp_b);
+
+        let ctx = ToolContext {
+            repos: vec![
+                RepoCtx {
+                    name: "repoA".into(),
+                    root: tmp_a.path().to_path_buf(),
+                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                },
+                RepoCtx {
+                    name: "repoB".into(),
+                    root: tmp_b.path().to_path_buf(),
+                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                },
+            ],
+            fs_tools: false,
+        };
+
+        let result = handle_get_context(&ctx, &serde_json::json!({})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("repoA"), "expected repoA in: {text}");
+        assert!(text.contains("repoB"), "expected repoB in: {text}");
+        assert!(text.contains("\"repos\""), "expected repos envelope in: {text}");
+    }
+
+    #[test]
+    fn get_context_multi_repo_filtered_by_repo() {
+        let tmp_a = TempDir::new().unwrap();
+        let tmp_b = TempDir::new().unwrap();
+        setup_codeindex(&tmp_a);
+        // tmp_b intentionally has no .codeindex
+
+        let ctx = ToolContext {
+            repos: vec![
+                RepoCtx {
+                    name: "repoA".into(),
+                    root: tmp_a.path().to_path_buf(),
+                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                },
+                RepoCtx {
+                    name: "repoB".into(),
+                    root: tmp_b.path().to_path_buf(),
+                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                },
+            ],
+            fs_tools: false,
+        };
+
+        // With `repo: "repoA"` filter, returns single-repo format (no envelope)
+        let result =
+            handle_get_context(&ctx, &serde_json::json!({"repo": "repoA"})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("auth"), "expected auth package in: {text}");
+        assert!(!text.contains("\"repos\""), "single-repo format should have no envelope");
+    }
+
+    #[test]
+    fn find_definition_multi_repo_prefixes_output() {
+        let tmp_a = TempDir::new().unwrap();
+        let tmp_b = TempDir::new().unwrap();
+
+        // Both repos define a `handle` symbol
+        use crate::indexer::writer::{write_index, write_package};
+        for (tmp, repo_name) in &[(&tmp_a, "repoA"), (&tmp_b, "repoB")] {
+            let idx = RepoIndex {
+                repo: (*repo_name).into(),
+                generated_at: "2026-06-16T00:00:00Z".into(),
+                packages: vec![PackageSummary {
+                    name: "core".into(),
+                    purpose: String::new(),
+                    files: 1,
+                    score: 0.9,
+                }],
+                hot_symbols: vec!["handle".into()],
+            };
+            let pkg = PackageDetail {
+                name: "core".into(),
+                files: vec![FileEntry {
+                    path: PathBuf::from("src/core.rs"),
+                    symbols: vec![SymbolEntry {
+                        name: "handle".into(),
+                        signature: "fn handle()".into(),
+                        kind: SymbolKind::Function,
+                        line: 5,
+                        character: 0,
+                    }],
+                    depends_on: vec![],
+                    depended_by: vec![],
+                }],
+            };
+            write_index(&idx, &tmp.path().join(".codeindex")).unwrap();
+            write_package(&pkg, &tmp.path().join(".codeindex")).unwrap();
+        }
+
+        let ctx = ToolContext {
+            repos: vec![
+                RepoCtx {
+                    name: "repoA".into(),
+                    root: tmp_a.path().to_path_buf(),
+                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                },
+                RepoCtx {
+                    name: "repoB".into(),
+                    root: tmp_b.path().to_path_buf(),
+                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                },
+            ],
+            fs_tools: false,
+        };
+
+        let result =
+            handle_find_definition(&ctx, &serde_json::json!({"symbol": "handle"}))
+                .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("repoA/"), "expected repoA/ prefix in: {text}");
+        assert!(text.contains("repoB/"), "expected repoB/ prefix in: {text}");
     }
 }
