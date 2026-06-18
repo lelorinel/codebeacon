@@ -13,10 +13,23 @@ pub fn write_package(pkg: &PackageDetail, codeindex_dir: &Path) -> Result<()> {
 
 pub fn write_index(index: &RepoIndex, codeindex_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(codeindex_dir)?;
+    ensure_gitignore(codeindex_dir);
     let path = codeindex_dir.join("index.json");
     let json = serde_json::to_string_pretty(index)?;
     std::fs::write(path, json)?;
     Ok(())
+}
+
+fn ensure_gitignore(codeindex_dir: &Path) {
+    let Some(repo_root) = codeindex_dir.parent() else { return };
+    let gitignore = repo_root.join(".gitignore");
+    let entry = ".codeindex/";
+    let existing = std::fs::read_to_string(&gitignore).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == entry) {
+        return;
+    }
+    let sep = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
+    let _ = std::fs::write(&gitignore, format!("{existing}{sep}{entry}\n"));
 }
 
 pub fn read_index(codeindex_dir: &Path) -> Result<Option<RepoIndex>> {
@@ -85,5 +98,37 @@ mod tests {
         assert!(path.exists());
         let back: RepoIndex = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(back.repo, "test-repo");
+    }
+
+    #[test]
+    fn write_index_adds_gitignore_entry() {
+        let tmp = TempDir::new().unwrap();
+        let codeindex_dir = tmp.path().join(".codeindex");
+        let idx = RepoIndex {
+            repo: "r".into(),
+            generated_at: "2026-06-18T00:00:00Z".into(),
+            packages: vec![],
+            hot_symbols: vec![],
+        };
+        write_index(&idx, &codeindex_dir).unwrap();
+        let gi = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        assert!(gi.lines().any(|l| l.trim() == ".codeindex/"), ".gitignore should contain .codeindex/");
+    }
+
+    #[test]
+    fn write_index_does_not_duplicate_gitignore_entry() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), ".codeindex/\n").unwrap();
+        let codeindex_dir = tmp.path().join(".codeindex");
+        let idx = RepoIndex {
+            repo: "r".into(),
+            generated_at: "2026-06-18T00:00:00Z".into(),
+            packages: vec![],
+            hot_symbols: vec![],
+        };
+        write_index(&idx, &codeindex_dir).unwrap();
+        let gi = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        let count = gi.lines().filter(|l| l.trim() == ".codeindex/").count();
+        assert_eq!(count, 1, ".codeindex/ should appear exactly once");
     }
 }
