@@ -57,7 +57,7 @@ Two hook types (do not confuse them):
 1. **Discovery** (`assets/hooks/codebeacon-context.sh`) — nudges agent to use `get_context` when `.codeindex/` exists
 2. **Security** (`.cursor/hooks/codebeacon-security.sh`) — blocks/warns on CWE-190 patterns
 
-See `assets/hooks/cursor-hooks.json.example` for combined Cursor config.
+See `.cursor/hooks.json.example` (installed with `codebeacon install --platform cursor`). Copy to `.cursor/hooks.json` to enable.
 
 ## Git post-commit hook
 

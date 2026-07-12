@@ -136,6 +136,7 @@ fn install_cursor(ctx: &InstallCtx) -> Result<()> {
 
     let hooks_example = ctx.manifest_dir.join("assets/hooks/cursor-hooks.json.example");
     let hook_src = ctx.manifest_dir.join("assets/hooks/codebeacon-context.sh");
+    let security_src = ctx.manifest_dir.join("assets/hooks/codebeacon-security.sh");
     if hook_src.exists() {
         let hook_dest = root.join(".cursor/hooks/codebeacon-context.sh");
         fs::create_dir_all(hook_dest.parent().unwrap())?;
@@ -147,11 +148,22 @@ fn install_cursor(ctx: &InstallCtx) -> Result<()> {
         }
         println!("  wrote {}", hook_dest.display());
     }
+    if security_src.exists() {
+        let hook_dest = root.join(".cursor/hooks/codebeacon-security.sh");
+        fs::create_dir_all(hook_dest.parent().unwrap())?;
+        fs::copy(&security_src, &hook_dest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&hook_dest, fs::Permissions::from_mode(0o755))?;
+        }
+        println!("  wrote {}", hook_dest.display());
+    }
     if hooks_example.exists() {
-        println!(
-            "  hint: merge {} into .cursor/hooks.json for discovery nudges",
-            hooks_example.display()
-        );
+        let dest = root.join(".cursor/hooks.json.example");
+        fs::copy(&hooks_example, &dest)?;
+        println!("  wrote {}", dest.display());
+        println!("  hint: cp .cursor/hooks.json.example .cursor/hooks.json to enable hooks");
     }
     Ok(())
 }
