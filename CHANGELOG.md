@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`verify_security` MCP tool** — check a code fragment without writing to disk (available when security is enabled).
 - **Z3 formal verification** (optional `security-z3` Cargo feature) — SAT/UNSAT/Unknown outcomes for integer-overflow allocation sites; pattern-only fallback when the feature is off.
 - **Policy modes** — `strict`, `balanced` (default), `permissive`; configurable Z3 timeout and `block_on_unknown`.
-- **Hook examples** — Cursor (`.cursor/hooks/`), Claude Code (`.claude/hooks/`), OpenCode (`docs/opencode-security.example.jsonc`).
+- **Hook examples** — `assets/hooks/` (Cursor + Claude + OpenCode `docs/opencode-security.example.jsonc`).
 - **Docs** — [SECURITY_EDIT_PATHS.md](docs/SECURITY_EDIT_PATHS.md).
 
 #### CLI & distribution

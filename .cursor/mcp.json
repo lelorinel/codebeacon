@@ -1,5 +1,0 @@
-{
-  // codebeacon-start
-  "mcpServers": { "codebeacon": {"args":["serve"],"command":"/home/lelor/projects/LCP/target/debug/codebeacon"} }
-  // codebeacon-end
-}

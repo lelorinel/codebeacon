@@ -55,9 +55,9 @@ Idempotent markers (`<!-- codebeacon-start -->`) protect user edits outside Code
 Two hook types (do not confuse them):
 
 1. **Discovery** (`assets/hooks/codebeacon-context.sh`) — nudges agent to use `get_context` when `.codeindex/` exists
-2. **Security** (`.cursor/hooks/codebeacon-security.sh`) — blocks/warns on CWE-190 patterns
+2. **Security** (`assets/hooks/codebeacon-security.sh`) — blocks/warns on CWE-190 patterns
 
-See `.cursor/hooks.json.example` (installed with `codebeacon install --platform cursor`). Copy to `.cursor/hooks.json` to enable.
+See `assets/hooks/cursor-hooks.json.example`. After `codebeacon install --platform cursor --project`, copy `.cursor/hooks.json.example` to `.cursor/hooks.json`.
 
 ## Git post-commit hook
 

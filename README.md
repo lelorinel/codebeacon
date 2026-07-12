@@ -368,11 +368,11 @@ Policy mode and Z3 timeout are read from `.codeindex.toml` `[security]`; verific
 
 ### Cursor hook (example)
 
-Copy [`.cursor/hooks.json.example`](.cursor/hooks.json.example) to `.cursor/hooks.json` and ensure [`codebeacon`](.) is on `PATH`. The hook script [`.cursor/hooks/codebeacon-security.sh`](.cursor/hooks/codebeacon-security.sh) gates native `Write` tools.
+After install, copy `.cursor/hooks.json.example` to `.cursor/hooks.json` (or merge from [`assets/hooks/cursor-hooks.json.example`](assets/hooks/cursor-hooks.json.example)). Script: [`assets/hooks/codebeacon-security.sh`](assets/hooks/codebeacon-security.sh).
 
 ### Claude Code hook (example)
 
-Merge [`.claude/settings.security.example.json`](.claude/settings.security.example.json) into your Claude settings. Script: [`.claude/hooks/codebeacon-security.sh`](.claude/hooks/codebeacon-security.sh).
+Merge [`assets/hooks/claude-settings.security.example.json`](assets/hooks/claude-settings.security.example.json) into your Claude settings. Copy [`assets/hooks/codebeacon-security.sh`](assets/hooks/codebeacon-security.sh) to `.claude/hooks/` (or `~/.claude/hooks/`).
 
 ### OpenCode (force MCP path)
 
