@@ -1,6 +1,7 @@
+use crate::security::{PolicyMode, SecurityPolicy};
+use anyhow::Result;
 use serde::Deserialize;
 use std::path::Path;
-use anyhow::Result;
 
 #[derive(Debug, Deserialize)]
 pub struct CodeIndexConfig {
@@ -26,6 +27,12 @@ pub struct CodeIndexConfig {
 
     #[serde(default)]
     pub lsp: LspConfig,
+
+    #[serde(default)]
+    pub security: SecurityConfig,
+
+    #[serde(default)]
+    pub extractor: ExtractorConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -40,6 +47,101 @@ impl Default for CodeIndexConfig {
             lsp_concurrency: default_lsp_concurrency(),
             lsp_enrich_timeout_secs: default_lsp_enrich_timeout_secs(),
             lsp: LspConfig::default(),
+            security: SecurityConfig::default(),
+            extractor: ExtractorConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExtractorConfig {
+    /// regex | tree-sitter | auto (tree-sitter when feature enabled, else regex)
+    #[serde(default = "default_extractor_mode")]
+    pub mode: String,
+
+    /// Per-file parse budget (ms); fallback to regex on timeout.
+    #[serde(default = "default_parse_timeout_ms")]
+    pub parse_timeout_ms: u64,
+
+    /// Skip tree-sitter above this size (bytes); use regex.
+    #[serde(default = "default_max_tree_sitter_bytes")]
+    pub max_tree_sitter_bytes: usize,
+}
+
+fn default_extractor_mode() -> String {
+    "auto".into()
+}
+
+fn default_parse_timeout_ms() -> u64 {
+    50
+}
+
+fn default_max_tree_sitter_bytes() -> usize {
+    512_000
+}
+
+impl Default for ExtractorConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_extractor_mode(),
+            parse_timeout_ms: default_parse_timeout_ms(),
+            max_tree_sitter_bytes: default_max_tree_sitter_bytes(),
+        }
+    }
+}
+
+impl ExtractorConfig {
+    pub fn uses_tree_sitter(&self) -> bool {
+        match self.mode.to_lowercase().as_str() {
+            "regex" => false,
+            "tree-sitter" | "treesitter" => cfg!(feature = "tree-sitter"),
+            _ => cfg!(feature = "tree-sitter"), // auto
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SecurityConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// strict | balanced | permissive
+    #[serde(default = "default_security_mode")]
+    pub mode: String,
+
+    #[serde(default = "default_z3_timeout_ms")]
+    pub z3_timeout_ms: u64,
+
+    #[serde(default)]
+    pub block_on_unknown: bool,
+}
+
+fn default_security_mode() -> String {
+    "balanced".into()
+}
+
+fn default_z3_timeout_ms() -> u64 {
+    5_000
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_security_mode(),
+            z3_timeout_ms: default_z3_timeout_ms(),
+            block_on_unknown: false,
+        }
+    }
+}
+
+impl SecurityConfig {
+    pub fn to_policy(&self, cli_security: bool) -> SecurityPolicy {
+        SecurityPolicy {
+            enabled: self.enabled || cli_security,
+            mode: PolicyMode::parse(&self.mode).unwrap_or_default(),
+            z3_timeout_ms: self.z3_timeout_ms,
+            block_on_unknown: self.block_on_unknown,
         }
     }
 }
@@ -107,5 +209,50 @@ overrides = { csharp = "OmniSharp" }
         fs::write(tmp.path().join(".codeindex.toml"), "extra_ignore_dirs = []\n").unwrap();
         let cfg = load(tmp.path()).unwrap();
         assert_eq!(cfg.lsp_concurrency, 2);
+    }
+
+    #[test]
+    fn load_parses_security_section() {
+        let tmp = TempDir::new().unwrap();
+        let config_content = r#"
+[security]
+enabled = true
+mode = "strict"
+z3_timeout_ms = 3000
+block_on_unknown = true
+"#;
+        fs::write(tmp.path().join(".codeindex.toml"), config_content).unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(cfg.security.enabled);
+        assert_eq!(cfg.security.mode, "strict");
+        assert_eq!(cfg.security.z3_timeout_ms, 3000);
+        assert!(cfg.security.block_on_unknown);
+        let policy = cfg.security.to_policy(false);
+        assert!(policy.enabled);
+        assert_eq!(policy.z3_timeout_ms, 3000);
+        assert!(policy.block_on_unknown);
+    }
+
+    #[test]
+    fn load_parses_extractor_section() {
+        let tmp = TempDir::new().unwrap();
+        let config_content = r#"
+[extractor]
+mode = "tree-sitter"
+parse_timeout_ms = 100
+max_tree_sitter_bytes = 256000
+"#;
+        fs::write(tmp.path().join(".codeindex.toml"), config_content).unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert_eq!(cfg.extractor.mode, "tree-sitter");
+        assert_eq!(cfg.extractor.parse_timeout_ms, 100);
+        assert_eq!(cfg.extractor.max_tree_sitter_bytes, 256_000);
+    }
+
+    #[test]
+    fn cli_security_flag_enables_policy() {
+        let cfg = SecurityConfig::default();
+        assert!(!cfg.to_policy(false).enabled);
+        assert!(cfg.to_policy(true).enabled);
     }
 }

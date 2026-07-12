@@ -51,11 +51,11 @@ pub fn text_content(text: impl Into<String>) -> Value {
     })
 }
 
-pub fn tool_list(fs_tools: bool) -> Value {
+pub fn tool_list(fs_tools: bool, security: bool) -> Value {
     let mut tools = vec![
         serde_json::json!({
             "name": "get_context",
-            "description": "Returns relevance-sorted code index. In a multi-repo workspace returns all repos; use `repo` to filter to one.",
+            "description": "Returns relevance-sorted code index (L0 summary). Prefer over grep/Read. Graphify equivalent: browse graph concepts.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -109,7 +109,7 @@ pub fn tool_list(fs_tools: bool) -> Value {
         }),
         serde_json::json!({
             "name": "get_dependents",
-            "description": "List files that depend on the given file (all repos by default; use 'repo/path' notation or the `repo` argument to scope).",
+            "description": "List files that depend on the given file (impact analysis). Graphify equivalent: reverse neighbors.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -126,6 +126,77 @@ pub fn tool_list(fs_tools: bool) -> Value {
                 "type": "object",
                 "properties": {
                     "repo": { "type": "string", "description": "Repo name to index (only needed in a multi-repo workspace; omit to index all repos)" }
+                },
+                "required": []
+            }
+        }),
+        serde_json::json!({
+            "name": "query_context",
+            "description": "Search packages, symbols, and files by keywords (Graphify equivalent: query_graph).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "Search query / keywords" },
+                    "repo": { "type": "string", "description": "Repo name (multi-repo workspace)" }
+                },
+                "required": ["question"]
+            }
+        }),
+        serde_json::json!({
+            "name": "shortest_path",
+            "description": "Shortest dependency path between two files/symbols (Graphify equivalent: graphify path).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string" },
+                    "to": { "type": "string" },
+                    "repo": { "type": "string" }
+                },
+                "required": ["from", "to"]
+            }
+        }),
+        serde_json::json!({
+            "name": "hotspots",
+            "description": "Top files by reverse-dependency count (Graphify equivalent: god_nodes).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Max results (default 10)" },
+                    "repo": { "type": "string" }
+                },
+                "required": []
+            }
+        }),
+        serde_json::json!({
+            "name": "get_report",
+            "description": "Returns CODEBEACON_REPORT.md (MCP resource equivalent: codebeacon://report).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repo": { "type": "string" }
+                },
+                "required": []
+            }
+        }),
+        serde_json::json!({
+            "name": "get_index_summary",
+            "description": "Returns index.json L0 summary (MCP resource equivalent: codebeacon://index).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repo": { "type": "string" }
+                },
+                "required": []
+            }
+        }),
+        serde_json::json!({
+            "name": "get_hotspots",
+            "description": "Alias for hotspots (MCP resource equivalent: codebeacon://hotspots).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer" },
+                    "repo": { "type": "string" }
                 },
                 "required": []
             }
@@ -186,6 +257,22 @@ pub fn tool_list(fs_tools: bool) -> Value {
                 }
             }),
         ]);
+    }
+
+    if security {
+        tools.push(serde_json::json!({
+            "name": "verify_security",
+            "description": "Run CWE-190 formal verification on a code fragment without writing to disk. Returns SAT witness, UNSAT proof, or pattern-only warnings per policy.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "Code fragment to verify (e.g. the new_string from an edit)" },
+                    "path":    { "type": "string", "description": "File path for context (defaults to 'fragment')" },
+                    "repo":    { "type": "string", "description": "Repo name (required if multiple repos in workspace)" }
+                },
+                "required": ["content"]
+            }
+        }));
     }
 
     serde_json::json!({ "tools": tools })

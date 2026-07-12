@@ -1,3 +1,4 @@
+use petgraph::algo::astar;
 use petgraph::graph::DiGraph;
 use petgraph::prelude::NodeIndex;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub mod bfs;
+pub mod path;
 pub mod persistence;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +84,65 @@ impl DependencyGraph {
 
     pub fn all_files(&self) -> Vec<PathBuf> {
         self.node_map.keys().cloned().collect()
+    }
+
+    /// Resolve a path string to a node in the graph (exact or suffix match).
+    pub fn resolve_node(&self, hint: &str) -> Option<PathBuf> {
+        let hint_path = PathBuf::from(hint);
+        if self.node_map.contains_key(&hint_path) {
+            return Some(hint_path);
+        }
+        let hint_norm = hint.replace('\\', "/");
+        self.node_map
+            .keys()
+            .find(|p| {
+                let s = p.to_string_lossy().replace('\\', "/");
+                s == hint_norm || s.ends_with(&hint_norm) || hint_norm.ends_with(&s)
+            })
+            .cloned()
+    }
+
+    /// Shortest directed path following import edges (`from` imports … eventually `to`).
+    pub fn shortest_path(&self, from: &PathBuf, to: &PathBuf) -> Option<Vec<PathBuf>> {
+        let from_idx = self.resolve_node(&from.to_string_lossy())?;
+        let to_idx = self.resolve_node(&to.to_string_lossy())?;
+        let from_idx = *self.node_map.get(&from_idx)?;
+        let to_idx = *self.node_map.get(&to_idx)?;
+
+        let result = astar(
+            &self.graph,
+            from_idx,
+            |n| n == to_idx,
+            |_| 1u32,
+            |_| 0u32,
+        )?;
+        Some(result.1.into_iter().map(|n| self.graph[n].clone()).collect())
+    }
+
+    /// Top files by number of direct dependents (reverse edge count).
+    pub fn hotspots(&self, limit: usize) -> Vec<(PathBuf, usize)> {
+        use petgraph::Direction;
+        let mut counts: HashMap<PathBuf, usize> = HashMap::new();
+        for path in self.node_map.keys() {
+            let idx = self.node_map[path];
+            let n = self
+                .graph
+                .neighbors_directed(idx, Direction::Incoming)
+                .count();
+            counts.insert(path.clone(), n);
+        }
+        let mut ranked: Vec<_> = counts.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked.truncate(limit);
+        ranked
+    }
+
+    pub fn edge_count(&self) -> usize {
+        self.graph.edge_count()
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.node_map.len()
     }
 }
 

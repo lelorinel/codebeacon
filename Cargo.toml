@@ -1,6 +1,6 @@
 [package]
 name = "codebeacon"
-version = "0.1.22"
+version = "0.2.0"
 edition = "2021"
 description = "Hierarchical code index for AI coding assistants — LSP-backed, MCP-served"
 license = "AGPL-3.0"
@@ -19,6 +19,14 @@ path = "src/main.rs"
 [[test]]
 name = "indexer_integration"
 path = "tests/integration/indexer_test.rs"
+
+[[test]]
+name = "extract_corpus"
+path = "tests/extract_corpus.rs"
+
+[[test]]
+name = "extract_perf"
+path = "tests/extract_perf.rs"
 
 [lib]
 name = "codebeacon"
@@ -43,6 +51,25 @@ ignore = "0.4"
 toml = "0.8"
 rayon = "1.10"
 regex = "1"
+z3 = { version = "0.12", optional = true }
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+
+[features]
+default = []
+security-z3 = ["dep:z3"]
+tree-sitter = [
+  "dep:tree-sitter",
+  "dep:tree-sitter-rust",
+  "dep:tree-sitter-go",
+  "dep:tree-sitter-python",
+  "dep:tree-sitter-typescript",
+  "dep:tree-sitter-c-sharp",
+]
 
 [dev-dependencies]
 tempfile = "3"

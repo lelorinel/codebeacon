@@ -22,7 +22,10 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
             "serverInfo": { "name": "codebeacon", "version": "0.1.0" }
         })),
         "initialized" => McpResponse::notification(json!({})),
-        "tools/list" => McpResponse::result(id, tool_list(ctx.map_or(false, |c| c.fs_tools))),
+        "tools/list" => McpResponse::result(id, tool_list(
+            ctx.map_or(false, |c| c.fs_tools),
+            ctx.map_or(false, |c| c.repos.iter().any(|r| r.security.enabled)),
+        )),
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
             let name = params["name"].as_str().unwrap_or("");
@@ -47,7 +50,7 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
 ///   2. `CLAUDE_PROJECT_DIR` env var (Claude Code)
 ///   3. `CURSOR_WORKSPACE` env var (Cursor)
 ///   4. `cwd` — works for VS Code, Zed, Cline (they set cwd = workspace folder)
-pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool) -> Result<()> {
+pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_security: bool) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut sin = stdin.lock();
@@ -173,7 +176,12 @@ pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool) -> Resul
             let cfg = crate::config_file::load(&root).unwrap_or_default();
             let lsp_pool =
                 Mutex::new(LspPool::new(&root_uri).with_overrides(cfg.lsp.overrides.clone()));
-            RepoCtx { name, root, lsp_pool }
+            RepoCtx {
+                name,
+                root,
+                lsp_pool,
+                security: cfg.security.to_policy(cli_security),
+            }
         })
         .collect();
     let ctx = ToolContext { repos: ctx_repos, fs_tools };
@@ -249,8 +257,17 @@ mod tests {
         let resp = handle_request_inner(req, None);
         let tools = &resp.result.unwrap()["tools"];
         assert!(tools.is_array());
-        // ctx is None here so fs_tools=false → 6 core tools (no fs tools)
-        assert!(tools.as_array().unwrap().len() == 6);
+        // ctx is None here so fs_tools=false → core tools only (no fs tools)
+        assert!(tools.as_array().unwrap().len() >= 12);
+        let names: Vec<_> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"query_context"));
+        assert!(names.contains(&"shortest_path"));
+        assert!(names.contains(&"hotspots"));
     }
 
     #[test]

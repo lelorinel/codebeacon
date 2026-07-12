@@ -3,10 +3,11 @@ pub mod writer;
 
 use crate::config::{codeindex_dir, detect_language, Language};
 use crate::config_file::CodeIndexConfig;
+use crate::extract::{extract_file, ExtractResult};
 use crate::graph::DependencyGraph;
 use crate::graph::bfs::score_files;
 use crate::graph::persistence;
-use crate::imports::{extract_imports, resolve_imports};
+use crate::imports::{resolve_imports, RawImport};
 use crate::indexer::package::{group_into_packages, hot_symbols};
 use crate::indexer::writer::{write_index, write_package};
 use crate::types::{FileEntry, PackageSummary, RepoIndex};
@@ -47,8 +48,12 @@ impl Indexer {
         Self { repo_root: repo_root.to_path_buf(), graph, config }
     }
 
+    pub fn extract_file(&self, path: &Path) -> ExtractResult {
+        extract_file(path, &self.config.extractor)
+    }
+
     pub fn extract_symbols(&self, path: &Path) -> Vec<crate::types::SymbolEntry> {
-        crate::extractor::extract_symbols(path)
+        self.extract_file(path).symbols
     }
 
     pub fn index_file(&mut self, path: &Path) -> Result<()> {
@@ -192,11 +197,11 @@ impl Indexer {
 
         // Re-index all stale files in a single batch
         for path in &stale {
-            let symbols = self.extract_symbols(path);
+            let extracted = self.extract_file(path);
             let rel = path.strip_prefix(&self.repo_root).unwrap_or(path);
             all_entries.push(FileEntry {
                 path: rel.to_path_buf(),
-                symbols,
+                symbols: extracted.symbols,
                 depends_on: vec![],
                 depended_by: vec![],
             });
@@ -210,17 +215,15 @@ impl Indexer {
     /// Populate `depends_on` / `depended_by` on each `FileEntry` and rebuild
     /// `self.graph` from scratch using heuristic import resolution.
     fn resolve_dependencies(&mut self, entries: &mut Vec<FileEntry>) {
-        // Build a lookup of all known repo-relative paths.
         let known: HashSet<PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
 
-        // Pass 1: fill depends_on for every file.
         for entry in entries.iter_mut() {
             let abs = self.repo_root.join(&entry.path);
             let lang = match detect_language(&abs) {
                 Some(l) => l,
                 None => continue,
             };
-            let raw = extract_imports(&abs);
+            let raw = self.extract_imports_for_file(&abs);
             let resolved = resolve_imports(&self.repo_root, &entry.path, &raw, &lang, &known);
             entry.depends_on = resolved
                 .iter()
@@ -338,11 +341,11 @@ impl Indexer {
         let all_entries: Vec<FileEntry> = files
             .par_iter()
             .map(|path| {
-                let symbols = crate::extractor::extract_symbols(path);
+                let extracted = extract_file(path, &self.config.extractor);
                 let rel = path.strip_prefix(&self.repo_root).unwrap_or(path).to_path_buf();
                 FileEntry {
                     path: rel,
-                    symbols,
+                    symbols: extracted.symbols,
                     depends_on: vec![],
                     depended_by: vec![],
                 }
@@ -425,6 +428,10 @@ impl Indexer {
             }
         }
         Ok(files)
+    }
+
+    fn extract_imports_for_file(&self, abs: &Path) -> Vec<RawImport> {
+        self.extract_file(abs).imports
     }
 }
 
@@ -569,6 +576,60 @@ mod tests {
         assert!(
             auth.depended_by.contains(&"src/lib.rs".to_string()),
             "after sync, auth.rs.depended_by should contain lib.rs, got: {:?}", auth.depended_by
+        );
+    }
+
+    #[test]
+    fn rebuild_index_from_map_updates_depends_on_for_changed_file() {
+        use std::collections::HashMap;
+
+        let tmp = TempDir::new().unwrap();
+        make_rust_repo(tmp.path());
+
+        let mut indexer = Indexer::new(tmp.path());
+        indexer.full_index().unwrap();
+
+        let mut entry_map: HashMap<PathBuf, FileEntry> = indexer
+            .load_all_entries()
+            .into_iter()
+            .map(|fe| (fe.path.clone(), fe))
+            .collect();
+
+        let lib_path = tmp.path().join("src/lib.rs");
+        fs::write(tmp.path().join("src/extra.rs"), "pub fn extra_fn() {}\n").unwrap();
+        fs::write(&lib_path, "pub mod auth;\npub mod db;\nmod extra;\n").unwrap();
+
+        let extracted = indexer.extract_file(&lib_path);
+        entry_map.insert(
+            PathBuf::from("src/lib.rs"),
+            FileEntry {
+                path: PathBuf::from("src/lib.rs"),
+                symbols: extracted.symbols,
+                depends_on: vec![],
+                depended_by: vec![],
+            },
+        );
+        entry_map.insert(
+            PathBuf::from("src/extra.rs"),
+            FileEntry {
+                path: PathBuf::from("src/extra.rs"),
+                symbols: indexer.extract_symbols(&tmp.path().join("src/extra.rs")),
+                depends_on: vec![],
+                depended_by: vec![],
+            },
+        );
+
+        indexer.rebuild_index_from_map(&entry_map).unwrap();
+
+        let entries = indexer.load_all_entries();
+        let lib = entries
+            .iter()
+            .find(|e| e.path == PathBuf::from("src/lib.rs"))
+            .unwrap();
+        assert!(
+            lib.depends_on.contains(&"src/extra.rs".to_string()),
+            "daemon-style rebuild should resolve new depends_on, got {:?}",
+            lib.depends_on
         );
     }
 }

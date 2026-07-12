@@ -1,10 +1,17 @@
 pub mod config;
 pub mod config_file;
 pub mod daemon;
+pub mod export;
+pub mod extract;
 pub mod extractor;
 pub mod graph;
+pub mod hook;
 pub mod imports;
 pub mod indexer;
+pub mod install;
 pub mod lsp;
 pub mod mcp;
+pub mod query;
+pub mod report;
+pub mod security;
 pub mod types;

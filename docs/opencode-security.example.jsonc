@@ -1,0 +1,17 @@
+// OpenCode — force file edits through Codebeacon MCP security gate.
+// Copy relevant sections into opencode.jsonc in your project root.
+// Verify MCP tool names with `opencode` tool list (prefix may vary).
+{
+  "permission": {
+    "edit": "deny",
+    "codebeacon_edit_file": "allow",
+    "codebeacon_write_file": "allow"
+  },
+  "mcp": {
+    "codebeacon": {
+      "type": "local",
+      "command": ["codebeacon", "serve", "--fs-tools", "--security"],
+      "enabled": true
+    }
+  }
+}

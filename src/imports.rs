@@ -1,5 +1,4 @@
-use crate::config::{detect_language, Language};
-use regex::Regex;
+use crate::config::Language;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -17,23 +16,8 @@ pub struct RawImport {
 /// Extract raw import targets from a source file.
 /// Returns an empty vec for unsupported languages or unreadable files.
 pub fn extract_imports(path: &Path) -> Vec<RawImport> {
-    let lang = match detect_language(path) {
-        Some(l) => l,
-        None => return vec![],
-    };
-
-    let code = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
-
-    match lang {
-        Language::Rust => extract_rust_imports(&code),
-        Language::TypeScript => extract_typescript_imports(&code),
-        Language::Python => extract_python_imports(&code),
-        Language::Go => extract_go_imports(&code),
-        Language::CSharp => vec![],
-    }
+    let config = crate::config_file::ExtractorConfig::default();
+    crate::extract::extract_file(path, &config).imports
 }
 
 /// Resolve raw imports to repo-relative paths that exist in `known`.
@@ -76,161 +60,16 @@ pub fn resolve_imports(
                     }
                 }
             }
-            Language::CSharp => {}
+            Language::CSharp => {
+                for p in resolve_csharp(from_file_rel, &imp.text, known) {
+                    if !result.contains(&p) {
+                        result.push(p);
+                    }
+                }
+            }
         }
     }
     result
-}
-
-// ---------------------------------------------------------------------------
-// extract — language implementations
-// ---------------------------------------------------------------------------
-
-fn extract_rust_imports(code: &str) -> Vec<RawImport> {
-    // mod foo; / pub mod foo; / pub(crate) mod foo;
-    let mod_re = Regex::new(
-        r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;",
-    )
-    .unwrap();
-    // use crate::... / use super::...
-    let use_re = Regex::new(
-        r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+((?:crate|super)::[\w:]+)",
-    )
-    .unwrap();
-
-    let mut imports = vec![];
-    for (idx, line) in code.lines().enumerate() {
-        let line_num = (idx + 1) as u32;
-        if let Some(caps) = mod_re.captures(line) {
-            if let Some(m) = caps.get(1) {
-                imports.push(RawImport {
-                    text: m.as_str().to_string(),
-                    line: line_num,
-                    character: m.start() as u32,
-                });
-            }
-        }
-        if let Some(caps) = use_re.captures(line) {
-            if let Some(m) = caps.get(1) {
-                imports.push(RawImport {
-                    text: m.as_str().to_string(),
-                    line: line_num,
-                    character: m.start() as u32,
-                });
-            }
-        }
-    }
-    imports
-}
-
-fn extract_typescript_imports(code: &str) -> Vec<RawImport> {
-    // import ... from './path' / export ... from '../path'
-    // Side-effect: import './path'
-    // Only capture paths starting with . (relative) or / (absolute repo paths).
-    let from_re =
-        Regex::new(r#"(?:import|export)\s[^;]*?from\s+['"]([./][^'"]+)['"]"#).unwrap();
-    let side_re = Regex::new(r#"import\s+['"]([./][^'"]+)['"]"#).unwrap();
-
-    let mut imports = vec![];
-    for (idx, line) in code.lines().enumerate() {
-        let line_num = (idx + 1) as u32;
-        for re in &[&from_re, &side_re] {
-            if let Some(caps) = re.captures(line) {
-                if let Some(m) = caps.get(1) {
-                    let text = m.as_str().to_string();
-                    // Skip bare package imports that slipped through
-                    if !text.starts_with('.') && !text.starts_with('/') {
-                        continue;
-                    }
-                    if !imports.iter().any(|r: &RawImport| r.text == text && r.line == line_num) {
-                        imports.push(RawImport {
-                            text,
-                            line: line_num,
-                            character: m.start() as u32,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    imports
-}
-
-fn extract_python_imports(code: &str) -> Vec<RawImport> {
-    // from .foo import ... / from foo.bar import ...
-    let from_re = Regex::new(r"^from\s+(\.+\w*|\w[\w.]*)\s+import").unwrap();
-    // import foo.bar (not `from`)
-    let import_re = Regex::new(r"^import\s+([\w.]+)").unwrap();
-
-    let mut imports = vec![];
-    for (idx, line) in code.lines().enumerate() {
-        let line_num = (idx + 1) as u32;
-        let trimmed = line.trim_start();
-        if let Some(caps) = from_re.captures(trimmed) {
-            if let Some(m) = caps.get(1) {
-                imports.push(RawImport {
-                    text: m.as_str().to_string(),
-                    line: line_num,
-                    character: m.start() as u32,
-                });
-                continue;
-            }
-        }
-        if let Some(caps) = import_re.captures(trimmed) {
-            if let Some(m) = caps.get(1) {
-                imports.push(RawImport {
-                    text: m.as_str().to_string(),
-                    line: line_num,
-                    character: m.start() as u32,
-                });
-            }
-        }
-    }
-    imports
-}
-
-fn extract_go_imports(code: &str) -> Vec<RawImport> {
-    // Single: import "path"
-    let single_re = Regex::new(r#"^\s*import\s+"([^"]+)""#).unwrap();
-    // Inside a group: \t"path"
-    let group_item_re = Regex::new(r#"^\s+"([^"]+)""#).unwrap();
-
-    let mut imports = vec![];
-    let mut in_group = false;
-    for (idx, line) in code.lines().enumerate() {
-        let line_num = (idx + 1) as u32;
-        let trimmed = line.trim();
-        if trimmed == "import (" {
-            in_group = true;
-            continue;
-        }
-        if in_group {
-            if trimmed == ")" {
-                in_group = false;
-                continue;
-            }
-            if let Some(caps) = group_item_re.captures(line) {
-                if let Some(m) = caps.get(1) {
-                    imports.push(RawImport {
-                        text: m.as_str().to_string(),
-                        line: line_num,
-                        character: m.start() as u32,
-                    });
-                }
-            }
-            continue;
-        }
-        if let Some(caps) = single_re.captures(line) {
-            if let Some(m) = caps.get(1) {
-                imports.push(RawImport {
-                    text: m.as_str().to_string(),
-                    line: line_num,
-                    character: m.start() as u32,
-                });
-            }
-        }
-    }
-    imports
 }
 
 // ---------------------------------------------------------------------------
@@ -243,13 +82,11 @@ fn resolve_rust(
     known: &HashSet<PathBuf>,
 ) -> Option<PathBuf> {
     if text.contains("::") {
-        // `use crate::a::b::c` — strip "crate::" or "super::" prefix, convert to path
         let without_crate = text
             .trim_start_matches("crate::")
             .trim_start_matches("super::");
         let parts: Vec<&str> = without_crate.split("::").collect();
 
-        // Try progressively shorter paths (last segment may be an item, not a file)
         for len in (1..=parts.len()).rev() {
             let seg = parts[..len].join("/");
             let candidates = vec![
@@ -262,7 +99,6 @@ fn resolve_rust(
         }
         None
     } else {
-        // `mod foo;` — look in same directory as from_file_rel
         let dir = from_file_rel.parent().unwrap_or_else(|| Path::new(""));
         let candidates = vec![
             dir.join(format!("{}.rs", text)),
@@ -277,7 +113,6 @@ fn resolve_typescript(
     text: &str,
     known: &HashSet<PathBuf>,
 ) -> Option<PathBuf> {
-    // Only handle relative imports
     if !text.starts_with('.') {
         return None;
     }
@@ -286,7 +121,6 @@ fn resolve_typescript(
         .parent()
         .unwrap_or_else(|| Path::new(""));
     let joined = base.join(text);
-    // Normalize the path (resolve .. and .)
     let normalized = normalize_path(&joined);
 
     let candidates = vec![
@@ -307,11 +141,9 @@ fn resolve_python(
     let mut result = vec![];
 
     if text.starts_with('.') {
-        // Relative import: count leading dots
         let dots = text.chars().take_while(|c| *c == '.').count();
         let module = text.trim_start_matches('.');
 
-        // Start from the file's directory, go up `dots - 1` levels
         let mut base = from_file_rel
             .parent()
             .map(|p| p.to_path_buf())
@@ -321,10 +153,7 @@ fn resolve_python(
         }
 
         if module.is_empty() {
-            // `from . import x` — the package itself
-            let candidates = vec![
-                base.join("__init__.py"),
-            ];
+            let candidates = vec![base.join("__init__.py")];
             for c in &candidates {
                 if known.contains(c) {
                     result.push(c.clone());
@@ -343,8 +172,6 @@ fn resolve_python(
             }
         }
     } else {
-        // Absolute import: a.b.c → a/b/c.py | a/b/c/__init__.py
-        // Also try src/ prefix
         let mod_path = text.replace('.', "/");
         let candidates = vec![
             PathBuf::from(format!("{}.py", mod_path)),
@@ -366,19 +193,15 @@ fn resolve_go(
     text: &str,
     known: &HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    // Read go.mod to get the module prefix
     let module_name = read_go_module(repo_root);
     let pkg_rel = if let Some(ref module) = module_name {
         if text.starts_with(module.as_str()) {
-            // Strip the module prefix + leading "/"
             let rest = &text[module.len()..];
             rest.trim_start_matches('/')
         } else {
-            // External package — skip
             return vec![];
         }
     } else {
-        // No go.mod — nothing we can resolve
         return vec![];
     };
 
@@ -386,7 +209,6 @@ fn resolve_go(
         return vec![];
     }
 
-    // All .go files in that directory that appear in known
     let dir = PathBuf::from(pkg_rel);
     known
         .iter()
@@ -398,6 +220,55 @@ fn resolve_go(
         .collect()
 }
 
+/// Best-effort C# namespace → file path heuristic.
+/// `using MyApp.Auth` → `MyApp/Auth.cs`, `Auth/MyApp.cs` variants, or suffix match in `known`.
+fn resolve_csharp(
+    from_file_rel: &Path,
+    text: &str,
+    known: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let ns = text.trim();
+    if ns.is_empty() {
+        return vec![];
+    }
+
+    let path_form = ns.replace('.', "/");
+    let mut candidates = vec![
+        PathBuf::from(format!("{}.cs", path_form)),
+        PathBuf::from(format!("{}/index.cs", path_form)),
+    ];
+
+    if let Some(parent) = from_file_rel.parent() {
+        candidates.push(parent.join(format!("{}.cs", path_form)));
+        if let Some(last) = path_form.rsplit('/').next() {
+            candidates.push(parent.join(format!("{last}.cs")));
+        }
+    }
+
+    let mut result = vec![];
+    for c in &candidates {
+        if known.contains(c) && !result.contains(c) {
+            result.push(c.clone());
+        }
+    }
+
+    if result.is_empty() {
+        let suffix = format!("/{}.cs", path_form.rsplit('/').next().unwrap_or(&path_form));
+        for p in known {
+            if p.extension().map(|e| e == "cs").unwrap_or(false) {
+                let s = p.to_string_lossy();
+                if s.ends_with(&suffix) || s.replace('\\', "/").contains(&format!("/{path_form}.cs")) {
+                    if !result.contains(p) {
+                        result.push(p.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -406,7 +277,6 @@ fn try_candidates(candidates: &[PathBuf], known: &HashSet<PathBuf>) -> Option<Pa
     candidates.iter().find(|c| known.contains(*c)).cloned()
 }
 
-/// Read the module name from `<repo_root>/go.mod` (first `module` line).
 fn read_go_module(repo_root: &Path) -> Option<String> {
     let content = std::fs::read_to_string(repo_root.join("go.mod")).ok()?;
     for line in content.lines() {
@@ -421,7 +291,6 @@ fn read_go_module(repo_root: &Path) -> Option<String> {
     None
 }
 
-/// Lexically normalize a path by resolving `.` and `..` components.
 fn normalize_path(path: &Path) -> PathBuf {
     let mut parts: Vec<std::ffi::OsString> = vec![];
     for component in path.components() {
@@ -459,10 +328,6 @@ mod tests {
         path
     }
 
-    // -----------------------------------------------------------------------
-    // extract_imports — Rust
-    // -----------------------------------------------------------------------
-
     #[test]
     fn rust_extracts_mod_declaration() {
         let tmp = TempDir::new().unwrap();
@@ -490,10 +355,6 @@ mod tests {
         assert_eq!(auth.line, 2);
     }
 
-    // -----------------------------------------------------------------------
-    // extract_imports — TypeScript
-    // -----------------------------------------------------------------------
-
     #[test]
     fn typescript_extracts_relative_import() {
         let tmp = TempDir::new().unwrap();
@@ -512,13 +373,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = write_file(tmp.path(), "src/app.ts", "import React from 'react';\n");
         let imports = extract_imports(&path);
-        // bare "react" should NOT appear (it's an external package)
         assert!(!imports.iter().any(|r| r.text == "react"));
     }
-
-    // -----------------------------------------------------------------------
-    // extract_imports — Python
-    // -----------------------------------------------------------------------
 
     #[test]
     fn python_extracts_relative_from_import() {
@@ -535,10 +391,6 @@ mod tests {
         let imports = extract_imports(&path);
         assert!(imports.iter().any(|r| r.text == "auth.login"));
     }
-
-    // -----------------------------------------------------------------------
-    // extract_imports — Go
-    // -----------------------------------------------------------------------
 
     #[test]
     fn go_extracts_single_import() {
@@ -565,9 +417,18 @@ mod tests {
         assert!(imports.iter().any(|r| r.text == "fmt"));
     }
 
-    // -----------------------------------------------------------------------
-    // resolve_imports — Rust
-    // -----------------------------------------------------------------------
+    #[test]
+    fn csharp_extracts_using_directive() {
+        let tmp = TempDir::new().unwrap();
+        let path = write_file(
+            tmp.path(),
+            "src/Program.cs",
+            "using MyApp.Auth;\nusing System;\n",
+        );
+        let imports = extract_imports(&path);
+        assert!(imports.iter().any(|r| r.text == "MyApp.Auth"));
+        assert!(!imports.iter().any(|r| r.text == "System"));
+    }
 
     #[test]
     fn rust_mod_resolves_to_sibling_rs() {
@@ -625,10 +486,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // -----------------------------------------------------------------------
-    // resolve_imports — TypeScript
-    // -----------------------------------------------------------------------
-
     #[test]
     fn typescript_relative_resolves_with_ts_extension() {
         let raw = vec![RawImport { text: "./utils".into(), line: 1, character: 21 }];
@@ -671,10 +528,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // -----------------------------------------------------------------------
-    // resolve_imports — Python
-    // -----------------------------------------------------------------------
-
     #[test]
     fn python_relative_resolves_sibling_py() {
         let raw = vec![RawImport { text: ".utils".into(), line: 1, character: 5 }];
@@ -703,17 +556,11 @@ mod tests {
         assert!(result.contains(&PathBuf::from("auth/login.py")));
     }
 
-    // -----------------------------------------------------------------------
-    // resolve_imports — Go
-    // -----------------------------------------------------------------------
-
     #[test]
     fn go_import_strips_module_prefix() {
         let tmp = TempDir::new().unwrap();
-        // Write a go.mod so resolve_go can find the module name
         write_file(tmp.path(), "go.mod", "module mymod\n\ngo 1.21\n");
         let raw = vec![RawImport { text: "mymod/pkg/auth".into(), line: 1, character: 8 }];
-        // go.mod: module mymod
         let k = known(&["pkg/auth/handler.go", "pkg/auth/models.go"]);
         let result = resolve_imports(
             tmp.path(),
@@ -740,5 +587,33 @@ mod tests {
             &k,
         );
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn csharp_using_resolves_namespace_path() {
+        let raw = vec![RawImport { text: "MyApp.Auth".into(), line: 1, character: 6 }];
+        let k = known(&["MyApp/Auth.cs", "src/Program.cs"]);
+        let result = resolve_imports(
+            Path::new("/repo"),
+            Path::new("src/Program.cs"),
+            &raw,
+            &Language::CSharp,
+            &k,
+        );
+        assert!(result.contains(&PathBuf::from("MyApp/Auth.cs")));
+    }
+
+    #[test]
+    fn csharp_using_resolves_sibling_file() {
+        let raw = vec![RawImport { text: "MyApp.Auth".into(), line: 1, character: 6 }];
+        let k = known(&["src/MyApp/Auth.cs", "src/Program.cs"]);
+        let result = resolve_imports(
+            Path::new("/repo"),
+            Path::new("src/Program.cs"),
+            &raw,
+            &Language::CSharp,
+            &k,
+        );
+        assert!(result.contains(&PathBuf::from("src/MyApp/Auth.cs")));
     }
 }

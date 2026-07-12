@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": ".cursor/hooks/codebeacon-context.sh",
+        "matcher": "Grep|Read|Glob",
+        "failClosed": false
+      },
+      {
+        "command": ".cursor/hooks/codebeacon-security.sh",
+        "matcher": "Write",
+        "failClosed": false
+      }
+    ]
+  }
+}

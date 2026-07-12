@@ -1,0 +1,7 @@
+graph TD
+  src_auth_rs["auth.rs"]
+  src_db_rs["db.rs"]
+  src_lib_rs["lib.rs"]
+  src_auth_rs --> src_db_rs
+  src_lib_rs --> src_db_rs
+  src_lib_rs --> src_auth_rs

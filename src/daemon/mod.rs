@@ -2,7 +2,6 @@ pub mod watcher;
 
 use crate::config::detect_language;
 use crate::daemon::watcher::start_watcher;
-use crate::imports::extract_imports;
 use crate::indexer::Indexer;
 use crate::lsp::pool::LspPool;
 use crate::types::FileEntry;
@@ -40,7 +39,7 @@ pub fn lsp_enrich(repo_root: &Path, lsp_overrides: HashMap<String, String>) -> R
             continue;
         }
 
-        let raw = extract_imports(&abs);
+        let raw = indexer.extract_file(&abs).imports;
         if raw.is_empty() {
             continue;
         }
@@ -134,10 +133,10 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
             .to_path_buf();
 
         if changed_file.exists() {
-            let symbols = indexer.extract_symbols(&changed_file);
+            let extracted = indexer.extract_file(&changed_file);
             let entry = FileEntry {
                 path: rel.clone(),
-                symbols,
+                symbols: extracted.symbols,
                 depends_on: vec![],
                 depended_by: vec![],
             };

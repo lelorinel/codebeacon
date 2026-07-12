@@ -1,13 +1,21 @@
 mod config;
 mod config_file;
 mod daemon;
+mod export;
+mod extract;
 mod extractor;
 mod graph;
+mod hook;
 mod imports;
 mod indexer;
+mod install;
 mod lsp;
 mod mcp;
+mod query;
+mod report;
+mod security;
 mod types;
+mod verify_cmd;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -24,25 +32,124 @@ pub struct Cli {
 enum Commands {
     /// Build full index for current repo
     Init {
-        /// Repo root (default: auto-detected from .git)
         #[arg(long)]
         root: Option<PathBuf>,
     },
     /// Start daemon + MCP server
     Serve {
-        /// Repo root (default: auto-detected from .git)
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Enable file-system tools (read_file, write_file, edit_file, list_directory).
-        /// Useful for local AI environments (e.g. LM Studio) that lack native file tools.
         #[arg(long)]
         fs_tools: bool,
+        #[arg(long)]
+        security: bool,
+    },
+    /// Verify a code fragment against the CWE-190 security policy
+    Verify {
+        #[arg(long)]
+        content: String,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Install Codebeacon skill, rules, and MCP config for AI platforms
+    Install {
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long)]
+        project: bool,
+        #[arg(long)]
+        security: bool,
+        #[arg(long)]
+        fs_tools: bool,
+        #[arg(long)]
+        list: bool,
+    },
+    /// Remove Codebeacon integration files
+    Uninstall {
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long)]
+        project: bool,
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Generate CODEBEACON_REPORT.md
+    Report {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Search packages, symbols, and files by keywords
+    Query {
+        question: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Shortest dependency path between two files/symbols/packages
+    Path {
+        from: String,
+        to: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Explain a symbol, package, or file
+    Explain {
+        name: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// List files that depend on the given file
+    Dependents {
+        file: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Export dependency graph
+    Export {
+        #[command(subcommand)]
+        command: ExportCommands,
+    },
+    /// Install or remove git post-commit re-index hook
+    Hook {
+        #[command(subcommand)]
+        command: HookCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExportCommands {
+    /// Export dependency graph as Mermaid diagram
+    Mermaid {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        package: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookCommands {
+    /// Install git post-commit hook
+    Install {
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Remove Codebeacon section from post-commit hook
+    Uninstall {
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Handle --version manually (clap doesn't auto-add it with subcommands)
     if std::env::args().any(|a| a == "--version" || a == "-V") {
         println!("codebeacon {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -60,21 +167,114 @@ async fn main() -> Result<()> {
                 println!("Index written to {}/.codeindex/", repo.display());
             }
         }
-        Commands::Serve { root, fs_tools } => {
-            // Root discovery, daemon spawning, and roots/list negotiation all
-            // happen inside run_stdio_server (after the MCP handshake).
-            mcp::run_stdio_server(root, fs_tools)?;
+        Commands::Serve { root, fs_tools, security } => {
+            mcp::run_stdio_server(root, fs_tools, security)?;
         }
+        Commands::Verify {
+            content,
+            path,
+            json,
+            root,
+        } => {
+            let out = verify_cmd::run_verify(&content, path.as_deref(), root)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                verify_cmd::print_human_output(&out);
+            }
+            let code = verify_cmd::exit_code_for_action(out.action);
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::Install {
+            platform,
+            project,
+            security,
+            fs_tools,
+            list,
+        } => {
+            install::run_install(&install::InstallOptions {
+                platform,
+                project,
+                security,
+                fs_tools,
+                list_only: list,
+            })?;
+        }
+        Commands::Uninstall {
+            platform,
+            project,
+            purge,
+        } => {
+            install::run_uninstall(&install::UninstallOptions {
+                platform,
+                project,
+                purge,
+            })?;
+        }
+        Commands::Report { root, output } => {
+            let opts = report::ReportOptions::resolve(root, output)?;
+            let md = report::generate(&opts)?;
+            println!("Report written to {}", opts.output.display());
+            if std::env::var("CODEBEACON_REPORT_STDOUT").is_ok() {
+                println!("{md}");
+            }
+        }
+        Commands::Query { question, root } => {
+            let repo = resolve_single_root(root)?;
+            let ctx = query::RepoQueryCtx::load(&repo)?;
+            print!("{}", ctx.format_query(&question, 10));
+        }
+        Commands::Path { from, to, root } => {
+            let repo = resolve_single_root(root)?;
+            let ctx = query::RepoQueryCtx::load(&repo)?;
+            println!("{}", ctx.path_between(&from, &to)?);
+        }
+        Commands::Explain { name, root } => {
+            let repo = resolve_single_root(root)?;
+            let ctx = query::RepoQueryCtx::load(&repo)?;
+            print!("{}", ctx.explain(&name)?);
+        }
+        Commands::Dependents { file, root } => {
+            let repo = resolve_single_root(root)?;
+            let ctx = query::RepoQueryCtx::load(&repo)?;
+            print!("{}", ctx.dependents_of(&file)?);
+        }
+        Commands::Export { command } => match command {
+            ExportCommands::Mermaid {
+                root,
+                output,
+                package,
+            } => {
+                let opts = export::mermaid::MermaidOptions::resolve(root, output, package)?;
+                export::mermaid::export_mermaid(&opts)?;
+                println!("Mermaid diagram written to {}", opts.output.display());
+            }
+        },
+        Commands::Hook { command } => match command {
+            HookCommands::Install { root } => {
+                let opts = hook::HookOptions::resolve(root)?;
+                hook::install(&opts)?;
+            }
+            HookCommands::Uninstall { root } => {
+                let opts = hook::HookOptions::resolve(root)?;
+                hook::uninstall(&opts)?;
+            }
+        },
     }
 
     Ok(())
 }
 
 fn resolve_roots(override_path: Option<PathBuf>) -> Result<Vec<PathBuf>> {
-    // Priority: --root flag > CLAUDE_PROJECT_DIR env var > cwd
-    let start = if let Some(p) = override_path {
-        p
-    } else if let Ok(env_root) = std::env::var("CLAUDE_PROJECT_DIR") {
+    if let Some(p) = override_path {
+        if !p.is_dir() {
+            anyhow::bail!("--root '{}' is not a directory", p.display());
+        }
+        return Ok(vec![p]);
+    }
+    let start = if let Ok(env_root) = std::env::var("CLAUDE_PROJECT_DIR") {
         PathBuf::from(env_root)
     } else {
         std::env::current_dir()?
@@ -91,13 +291,28 @@ fn resolve_roots(override_path: Option<PathBuf>) -> Result<Vec<PathBuf>> {
     Ok(repos)
 }
 
+fn resolve_single_root(override_path: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(p) = override_path {
+        return Ok(p);
+    }
+    let repos = resolve_roots(None)?;
+    Ok(repos[0].clone())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn cli_has_expected_subcommands() {
         use clap::CommandFactory;
         let cmd = super::Cli::command();
-        assert!(cmd.get_subcommands().any(|s| s.get_name() == "init"));
-        assert!(cmd.get_subcommands().any(|s| s.get_name() == "serve"));
+        for name in [
+            "init", "serve", "verify", "install", "report", "query", "path",
+            "explain", "dependents", "export", "hook",
+        ] {
+            assert!(
+                cmd.get_subcommands().any(|s| s.get_name() == name),
+                "missing subcommand: {name}"
+            );
+        }
     }
 }

@@ -3,6 +3,9 @@ use crate::graph::{persistence as graph_persistence, DependencyGraph};
 use crate::indexer::writer::{read_index, read_package};
 use crate::lsp::pool::LspPool;
 use crate::mcp::protocol::text_content;
+use crate::query::RepoQueryCtx;
+use crate::report;
+use crate::security::{decide, verify_fragment, GateAction, SecurityPolicy};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::{Component, PathBuf};
@@ -15,6 +18,7 @@ pub struct RepoCtx {
     /// Absolute path to the repo root (where `.codeindex/` lives).
     pub root: PathBuf,
     pub lsp_pool: Mutex<LspPool>,
+    pub security: SecurityPolicy,
 }
 
 impl RepoCtx {
@@ -66,6 +70,13 @@ pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
         "find_definition"  => handle_find_definition(ctx, args),
         "get_dependents"   => handle_get_dependents(ctx, args),
         "init_workspace"   => handle_init_workspace(ctx, args),
+        "verify_security"  => handle_verify_security(ctx, args),
+        "query_context"    => handle_query_context(ctx, args),
+        "shortest_path"    => handle_shortest_path(ctx, args),
+        "hotspots"         => handle_hotspots(ctx, args),
+        "get_report"       => handle_get_report(ctx, args),
+        "get_index_summary"=> handle_get_index_summary(ctx, args),
+        "get_hotspots"     => handle_get_hotspots_resource(ctx, args),
         "read_file" | "write_file" | "edit_file" | "list_directory" => {
             if !ctx.fs_tools {
                 anyhow::bail!(
@@ -523,6 +534,129 @@ pub fn handle_init_workspace(ctx: &ToolContext, args: &Value) -> Result<Value> {
 }
 
 // ---------------------------------------------------------------------------
+// Graph query tools (query_context, shortest_path, hotspots)
+// ---------------------------------------------------------------------------
+
+fn repo_query_ctx(repo: &RepoCtx) -> Result<RepoQueryCtx> {
+    RepoQueryCtx::load(&repo.root)
+}
+
+pub fn handle_query_context(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let question = args["question"].as_str().context("missing 'question'")?;
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+    let add_prefix = ctx.multi() && repo_filter.is_none();
+
+    for repo in repos {
+        match repo_query_ctx(repo) {
+            Ok(qctx) => {
+                let text = qctx.format_query(question, 10);
+                return Ok(text_content(if add_prefix {
+                    format!("[repo: {}]\n{text}", repo.name)
+                } else {
+                    text
+                }));
+            }
+            Err(e) => {
+                if repo_filter.is_some() {
+                    return Ok(text_content(format!("Index error for '{}': {e}", repo.name)));
+                }
+            }
+        }
+    }
+    Ok(text_content(
+        "No indexed repo found. Call `init_workspace` first.",
+    ))
+}
+
+pub fn handle_shortest_path(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let from = args["from"].as_str().context("missing 'from'")?;
+    let to = args["to"].as_str().context("missing 'to'")?;
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+
+    for repo in repos {
+        if let Ok(qctx) = repo_query_ctx(repo) {
+            let path = qctx.path_between(from, to)?;
+            let prefix = if ctx.multi() && repo_filter.is_none() {
+                format!("[repo: {}] ", repo.name)
+            } else {
+                String::new()
+            };
+            return Ok(text_content(format!("{prefix}{path}")));
+        }
+    }
+    anyhow::bail!("no indexed repo for shortest_path")
+}
+
+pub fn handle_hotspots(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+
+    for repo in repos {
+        if let Ok(qctx) = repo_query_ctx(repo) {
+            let text = qctx.hotspots_text(limit);
+            let prefix = if ctx.multi() && repo_filter.is_none() {
+                format!("[repo: {}]\n", repo.name)
+            } else {
+                String::new()
+            };
+            return Ok(text_content(format!("{prefix}{text}")));
+        }
+    }
+    anyhow::bail!("no indexed repo for hotspots")
+}
+
+// ---------------------------------------------------------------------------
+// Pseudo-resource tools (codebeacon://report, //index, //hotspots)
+// ---------------------------------------------------------------------------
+
+pub fn handle_get_report(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+    for repo in repos {
+        match report::generate_or_read(&repo.root) {
+            Ok(md) => {
+                let prefix = if ctx.multi() && repo_filter.is_none() {
+                    format!("[repo: {}]\n", repo.name)
+                } else {
+                    String::new()
+                };
+                return Ok(text_content(format!("{prefix}{md}")));
+            }
+            Err(e) if repo_filter.is_some() => {
+                return Ok(text_content(format!("Report error: {e}")));
+            }
+            Err(_) => continue,
+        }
+    }
+    anyhow::bail!("no repo for get_report")
+}
+
+pub fn handle_get_index_summary(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let repo_filter = args["repo"].as_str();
+    let repos = ctx.repos_for(repo_filter);
+
+    for repo in repos {
+        if let Some(index) = read_index(&repo.codeindex())? {
+            let text = serde_json::to_string_pretty(&index)?;
+            let prefix = if ctx.multi() && repo_filter.is_none() {
+                format!("[repo: {}]\n", repo.name)
+            } else {
+                String::new()
+            };
+            return Ok(text_content(format!("{prefix}{text}")));
+        }
+    }
+    Ok(text_content("No index found. Call init_workspace."))
+}
+
+pub fn handle_get_hotspots_resource(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    handle_hotspots(ctx, args)
+}
+
+// ---------------------------------------------------------------------------
 // File-system tools (read_file / write_file / edit_file / list_directory)
 // ---------------------------------------------------------------------------
 //
@@ -578,6 +712,16 @@ fn single_repo_for_write<'a>(ctx: &'a ToolContext, repo_filter: Option<&str>) ->
     }
 }
 
+/// Run security verification on a code fragment; block or warn per repo policy.
+fn apply_security_gate(repo: &RepoCtx, path: &std::path::Path, content: &str) -> Result<Option<String>> {
+    let report = verify_fragment(path, content, &repo.security);
+    match decide(&report, &repo.security) {
+        GateAction::Allow => Ok(None),
+        GateAction::Warn { message } => Ok(Some(message)),
+        GateAction::Block { message } => anyhow::bail!(message),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // read_file
 
@@ -619,6 +763,8 @@ pub fn handle_write_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
     let repo = single_repo_for_write(ctx, repo_filter)?;
     let abs  = safe_path(&repo.root, path_str)?;
 
+    let warning = apply_security_gate(&repo, &abs, content)?;
+
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directories for '{}'", abs.display()))?;
@@ -626,7 +772,11 @@ pub fn handle_write_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
     std::fs::write(&abs, content)
         .with_context(|| format!("Failed to write '{}'", abs.display()))?;
 
-    Ok(text_content(format!("Written: {}/{}", repo.name, path_str)))
+    let mut msg = format!("Written: {}/{}", repo.name, path_str);
+    if let Some(w) = warning {
+        msg.push_str(&format!("\n\n{w}"));
+    }
+    Ok(text_content(msg))
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +790,8 @@ pub fn handle_edit_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
 
     let repo = single_repo_for_write(ctx, repo_filter)?;
     let abs  = safe_path(&repo.root, path_str)?;
+
+    let warning = apply_security_gate(&repo, &abs, new_string)?;
 
     let original = std::fs::read_to_string(&abs)
         .with_context(|| format!("Failed to read '{}' for editing", abs.display()))?;
@@ -662,7 +814,52 @@ pub fn handle_edit_file(ctx: &ToolContext, args: &Value) -> Result<Value> {
     } else {
         String::new()
     };
-    Ok(text_content(format!("Edited: {}/{}{}", repo.name, path_str, note)))
+    let mut msg = format!("Edited: {}/{}{}", repo.name, path_str, note);
+    if let Some(w) = warning {
+        msg.push_str(&format!("\n\n{w}"));
+    }
+    Ok(text_content(msg))
+}
+
+// ---------------------------------------------------------------------------
+// verify_security
+// ---------------------------------------------------------------------------
+
+pub fn handle_verify_security(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let content = args["content"].as_str().context("missing 'content'")?;
+    let path_str = args["path"].as_str().unwrap_or("fragment");
+    let repo_filter = args["repo"].as_str();
+
+    let repo = single_repo_for_write(ctx, repo_filter)?;
+    let abs = if path_str == "fragment" {
+        repo.root.join("fragment")
+    } else {
+        safe_path(&repo.root, path_str)?
+    };
+
+    if !repo.security.enabled {
+        return Ok(text_content(
+            "Security verification is disabled. \
+             Enable with `codebeacon serve --security` or `[security] enabled = true` in .codeindex.toml.",
+        ));
+    }
+
+    let report = verify_fragment(&abs, content, &repo.security);
+    let action = decide(&report, &repo.security);
+
+    let text = match &action {
+        GateAction::Allow if report.findings.is_empty() => format!(
+            "No CWE-190 allocation sites found in `{}` ({} ms).",
+            report.path, report.elapsed_ms
+        ),
+        GateAction::Allow => format!(
+            "All {} site(s) in `{}` are proven safe ({} Z3 call(s), {} ms).",
+            report.sites_checked, report.path, report.z3_invocations, report.elapsed_ms
+        ),
+        GateAction::Warn { message } | GateAction::Block { message } => message.clone(),
+    };
+
+    Ok(text_content(text))
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +922,7 @@ mod tests {
                 name: "test".into(),
                 root: tmp.path().to_path_buf(),
                 lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                security: SecurityPolicy::default(),
             }],
             fs_tools: true,
         }
@@ -858,6 +1056,50 @@ mod tests {
             "new_string": "replacement"
         }));
         assert!(result.is_err(), "expected error when old_string not found");
+    }
+
+    #[test]
+    fn write_file_security_warns_on_cwe190_pattern() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        let mut ctx = single_ctx(&tmp);
+        ctx.repos[0].security.enabled = true;
+        let result = handle_write_file(&ctx, &serde_json::json!({
+            "path": "alloc.c",
+            "content": "void* p = malloc(n * sizeof(int));"
+        }));
+
+        #[cfg(feature = "security-z3")]
+        {
+            let err = result.expect_err("expected block on proven CWE-190");
+            let text = err.to_string();
+            assert!(text.contains("CWE-190"), "expected CWE-190 in: {text}");
+            assert!(
+                text.contains("BLOCKED") || text.contains("PROVEN"),
+                "expected block/proven in: {text}"
+            );
+            assert!(fs::read_to_string(tmp.path().join("alloc.c")).is_err());
+        }
+
+        #[cfg(not(feature = "security-z3"))]
+        {
+            let result = result.unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("WARNING"), "expected warning in: {text}");
+            assert!(text.contains("CWE-190"), "expected CWE-190 in: {text}");
+            assert!(fs::read_to_string(tmp.path().join("alloc.c")).is_ok());
+        }
+    }
+
+    #[test]
+    fn verify_security_reports_pattern_finding() {
+        let mut ctx = single_ctx(&TempDir::new().unwrap());
+        ctx.repos[0].security.enabled = true;
+        let result = handle_verify_security(&ctx, &serde_json::json!({
+            "content": "int* p = malloc(n * sizeof(int));"
+        })).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("CWE-190"), "expected CWE-190 in: {text}");
     }
 
     #[test]
@@ -1028,11 +1270,13 @@ mod tests {
                     name: "repoA".into(),
                     root: tmp_a.path().to_path_buf(),
                     lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                    security: SecurityPolicy::default(),
                 },
                 RepoCtx {
                     name: "repoB".into(),
                     root: tmp_b.path().to_path_buf(),
                     lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                    security: SecurityPolicy::default(),
                 },
             ],
             fs_tools: false,
@@ -1058,11 +1302,13 @@ mod tests {
                     name: "repoA".into(),
                     root: tmp_a.path().to_path_buf(),
                     lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                    security: SecurityPolicy::default(),
                 },
                 RepoCtx {
                     name: "repoB".into(),
                     root: tmp_b.path().to_path_buf(),
                     lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                    security: SecurityPolicy::default(),
                 },
             ],
             fs_tools: false,
@@ -1120,11 +1366,13 @@ mod tests {
                     name: "repoA".into(),
                     root: tmp_a.path().to_path_buf(),
                     lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                    security: SecurityPolicy::default(),
                 },
                 RepoCtx {
                     name: "repoB".into(),
                     root: tmp_b.path().to_path_buf(),
                     lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                    security: SecurityPolicy::default(),
                 },
             ],
             fs_tools: false,
@@ -1136,5 +1384,59 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("repoA/"), "expected repoA/ prefix in: {text}");
         assert!(text.contains("repoB/"), "expected repoB/ prefix in: {text}");
+    }
+
+    #[test]
+    fn shortest_path_mcp_dispatch() {
+        let root = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/simple_rust"
+        ));
+        if !root.join(".codeindex/index.json").exists() {
+            let mut indexer = crate::indexer::Indexer::new(&root);
+            indexer.full_index().unwrap();
+        }
+        let ctx = ToolContext {
+            repos: vec![RepoCtx {
+                name: "simple_rust".into(),
+                root: root.clone(),
+                lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                security: SecurityPolicy::default(),
+            }],
+            fs_tools: false,
+        };
+        let result = handle_shortest_path(
+            &ctx,
+            &serde_json::json!({"from": "src/auth.rs", "to": "src/db.rs"}),
+        )
+        .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("auth.rs"));
+        assert!(text.contains("db.rs"));
+    }
+
+    #[test]
+    fn hotspots_mcp_dispatch() {
+        let root = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/simple_rust"
+        ));
+        if !root.join(".codeindex/index.json").exists() {
+            let mut indexer = crate::indexer::Indexer::new(&root);
+            indexer.full_index().unwrap();
+        }
+        let ctx = ToolContext {
+            repos: vec![RepoCtx {
+                name: "simple_rust".into(),
+                root,
+                lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+                security: SecurityPolicy::default(),
+            }],
+            fs_tools: false,
+        };
+        let result = handle_hotspots(&ctx, &serde_json::json!({"limit": 5})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("db.rs"));
+        assert!(text.contains("dependents"));
     }
 }

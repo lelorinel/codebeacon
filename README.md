@@ -2,7 +2,22 @@
 
 > A hierarchical code index for AI coding assistants. Replaces grep + read loops with a relevance-sorted map that always fits in context.
 
----
+Live LSP-backed indexing, graph query CLI, one-command install for major AI platforms, and an optional Z3 CWE-190 security gate at edit time.
+
+**New in v0.2.0:** security verify CLI + hooks, `install` / `report` / `query` / `path`, optional tree-sitter extraction. See [CHANGELOG.md](CHANGELOG.md).
+
+## 30-Second Quickstart
+
+```bash
+cargo install codebeacon
+cd your-project && codebeacon init
+codebeacon install --platform cursor --project
+codebeacon serve    # add to MCP config, or install does it for you
+```
+
+Then in your AI agent: call **`get_context`** first (not grep). Try `codebeacon query "auth"`, `codebeacon path src/a.rs src/b.rs`, `codebeacon report`.
+
+Demo: [`worked/simple-rust/`](worked/simple-rust/) · Docs: [INSTALL](docs/INSTALL.md) · [TEAM](docs/TEAM.md) · [ROADMAP](docs/ROADMAP.md) · [Changelog](CHANGELOG.md)
 
 ## The Problem
 
@@ -33,7 +48,7 @@ Existing approaches have real gaps:
 ![Architecture](docs/images/architecture.png)
 
 1. **FSWatcher** detects file changes with 100ms debounce
-2. **Extractor** parses symbols from source code line-by-line with regex (no LSP needed)
+2. **Extractor** parses symbols and imports (regex by default; optional tree-sitter with fallback)
 3. **Indexer** resolves import statements to build an accurate dependency graph, then writes a hierarchical `.codeindex/`
 4. **LSP Enricher** (background) uses LSP `definition` calls on import statements to discover additional dependency edges
 5. **MCP Server** exposes tools for AI to query on demand
@@ -65,7 +80,8 @@ Codebeacon resolves `import` / `use` / `require` statements to build an accurate
 | TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx` |
 | C# | `.cs` |
 
-Symbol extraction is done via regex — no LSP binaries needed for indexing.  
+Symbol extraction uses regex by default (no LSP binaries needed for indexing). Build with `--features tree-sitter` for AST-based extraction on the languages above; regex is still the fallback on parse errors or timeouts.
+
 LSP binaries (`rust-analyzer`, `gopls`, `pylsp`, `typescript-language-server`, `csharp-ls`) are only required for the `find_definition` and `find_references` MCP tools. If a binary is missing, those tools fall back to index-based search.
 
 ---
@@ -91,6 +107,18 @@ git clone https://github.com/lelorinel/codebeacon
 cd codebeacon
 cargo build --release
 # binary at target/release/codebeacon
+
+# Optional: tree-sitter extraction (Rust, Go, Python, TypeScript, C#)
+cargo build --release --features tree-sitter
+```
+
+Configure extraction in `.codeindex.toml`:
+
+```toml
+[extractor]
+mode = "auto"              # regex | tree-sitter | auto
+parse_timeout_ms = 50
+max_tree_sitter_bytes = 512000
 ```
 
 ---
@@ -112,8 +140,30 @@ You can skip this step — if no index exists when the MCP server starts, the `i
 ```bash
 codebeacon serve                         # default: code context tools only
 codebeacon serve --fs-tools              # also enable file read/write/edit tools
+codebeacon serve --security              # enable Z3 CWE-190 gate on writes
 codebeacon serve --root /path/to/project # override workspace root
 ```
+
+### Graph commands (CLI)
+
+```bash
+codebeacon query "authentication"          # search packages/symbols/files
+codebeacon path src/auth.rs src/db.rs    # shortest dependency chain
+codebeacon explain login                 # symbol, package, or file detail
+codebeacon dependents src/db.rs          # reverse dependency list
+codebeacon report                        # generate CODEBEACON_REPORT.md
+codebeacon export mermaid                # .codebeacon/dep-graph.mmd
+```
+
+### Install for AI platforms
+
+```bash
+codebeacon install --platform cursor --project   # rules + MCP config
+codebeacon install --list                        # all platforms
+codebeacon hook install                          # git post-commit re-index
+```
+
+See [docs/INSTALL.md](docs/INSTALL.md) for Claude, Codex, OpenCode, Hermes, and VS Code.
 
 ---
 
@@ -263,6 +313,12 @@ All tools accept an optional `repo` argument to scope the operation to a single 
 | `find_definition(symbol, repo?)` | Definition location and signature. |
 | `get_dependents(file, repo?)` | Files that depend on this file — "what breaks if I change this?" |
 | `init_workspace(repo?)` | Build (or rebuild) the code index. Called automatically when no index exists yet. Use `repo` to index a single repo in a multi-repo workspace. |
+| `query_context(question, repo?)` | Search packages/symbols/files by keywords. |
+| `shortest_path(from, to, repo?)` | Shortest import dependency chain between two files. |
+| `hotspots(limit?, repo?)` | Top files by reverse-dependency count (god nodes). |
+| `get_report(repo?)` | Returns `CODEBEACON_REPORT.md` (resource: `codebeacon://report`). |
+| `get_index_summary(repo?)` | Returns L0 `index.json` (resource: `codebeacon://index`). |
+| `get_hotspots(repo?)` | Alias for `hotspots` (resource: `codebeacon://hotspots`). |
 
 ### File-system tools (`--fs-tools` flag required)
 
@@ -278,6 +334,49 @@ All file-system tools accept an optional `repo` argument in multi-repo workspace
 | `list_directory(path?, repo?)` | List files and subdirectories at a path (defaults to repo root). |
 
 All file-system operations are sandboxed to the configured repo roots — path traversal attempts are rejected.
+
+### Security tools (`--security` flag or `[security] enabled = true`)
+
+| Tool | Description |
+|---|---|
+| `verify_security(content, path?, repo?)` | Run CWE-190 verification on a fragment without writing to disk. Returns pattern warnings or Z3 SAT/UNSAT when built with `security-z3`. |
+
+When security is enabled, `write_file` and `edit_file` also run the gate automatically.
+
+---
+
+## Security gate (cross-client)
+
+Codebeacon can block CWE-190 integer-overflow patterns in allocation code before edits land on disk. Coverage depends on how the host agent writes files:
+
+| Tier | Mechanism | Clients |
+|---|---|---|
+| MCP gate | `write_file` / `edit_file` with `codebeacon serve --fs-tools --security` | LM Studio, OpenCode (with native edit denied) |
+| Host hooks | `preToolUse` / `PreToolUse` → `codebeacon verify` | Cursor, Claude Code |
+| CI / git hooks | `codebeacon verify` in pipeline | All clients (post-edit) |
+
+**Full coverage matrix, hook setup, and QA checklist:** [docs/SECURITY_EDIT_PATHS.md](docs/SECURITY_EDIT_PATHS.md)
+
+### Verify CLI (hooks and CI)
+
+```bash
+codebeacon verify --content 'malloc(n * sizeof(int));' --path alloc.c
+codebeacon verify --content '...' --json   # exit 0 = allow/warn, exit 1 = block
+```
+
+Policy mode and Z3 timeout are read from `.codeindex.toml` `[security]`; verification is always enabled for this command.
+
+### Cursor hook (example)
+
+Copy [`.cursor/hooks.json.example`](.cursor/hooks.json.example) to `.cursor/hooks.json` and ensure [`codebeacon`](.) is on `PATH`. The hook script [`.cursor/hooks/codebeacon-security.sh`](.cursor/hooks/codebeacon-security.sh) gates native `Write` tools.
+
+### Claude Code hook (example)
+
+Merge [`.claude/settings.security.example.json`](.claude/settings.security.example.json) into your Claude settings. Script: [`.claude/hooks/codebeacon-security.sh`](.claude/hooks/codebeacon-security.sh).
+
+### OpenCode (force MCP path)
+
+See [docs/opencode-security.example.jsonc](docs/opencode-security.example.jsonc) — deny native `edit` and allow Codebeacon MCP file tools with `--fs-tools --security`.
 
 ---
 
@@ -347,6 +446,17 @@ lsp_concurrency = 4
 # Seconds to spend enriching the heuristic index with LSP definition calls
 # to discover additional dependency edges (default: 60, set 0 to disable)
 lsp_enrich_timeout_secs = 30
+
+[extractor]
+mode = "auto"              # regex | tree-sitter | auto
+parse_timeout_ms = 50
+max_tree_sitter_bytes = 512000
+
+[security]
+enabled = false            # or: codebeacon serve --security
+mode = "balanced"          # strict | balanced | permissive
+z3_timeout_ms = 5000
+block_on_unknown = false
 
 [lsp]
 # Override LSP binary per language (e.g. use OmniSharp instead of csharp-ls)
