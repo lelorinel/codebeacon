@@ -2,8 +2,15 @@
 
 pub const MD_START: &str = "<!-- codebeacon-start -->";
 pub const MD_END: &str = "<!-- codebeacon-end -->";
-pub const JSON_START: &str = "// codebeacon-start";
-pub const JSON_END: &str = "// codebeacon-end";
+
+/// Strip `//` line comments so JSONC (e.g. prior install output) parses with serde_json.
+fn strip_jsonc_comments(input: &str) -> String {
+    input
+        .lines()
+        .filter(|line| !line.trim().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// Replace or append a marked section in markdown/text.
 pub fn merge_marked_section(existing: &str, section: &str) -> String {
@@ -44,11 +51,11 @@ pub fn merge_mcp_json(existing: &str, block: &str) -> Result<String, serde_json:
     if existing.trim().is_empty() {
         let inner = serde_json::to_string_pretty(&codebeacon_entry)?;
         return Ok(format!(
-            "{{\n  {JSON_START}\n  \"mcpServers\": {{\n    \"codebeacon\": {inner}\n  }}\n  {JSON_END}\n}}"
+            "{{\n  \"mcpServers\": {{\n    \"codebeacon\": {inner}\n  }}\n}}"
         ));
     }
 
-    let mut root: serde_json::Value = serde_json::from_str(existing)?;
+    let mut root: serde_json::Value = serde_json::from_str(&strip_jsonc_comments(existing))?;
     let obj = root.as_object_mut().ok_or_else(|| {
         serde_json::Error::io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -83,7 +90,7 @@ pub fn remove_mcp_json(existing: &str) -> Result<String, serde_json::Error> {
     if existing.trim().is_empty() {
         return Ok(String::new());
     }
-    let mut root: serde_json::Value = serde_json::from_str(existing)?;
+    let mut root: serde_json::Value = serde_json::from_str(&strip_jsonc_comments(existing))?;
     if let Some(obj) = root.as_object_mut() {
         for key in ["mcpServers", "mcp"] {
             if let Some(servers) = obj.get_mut(key).and_then(|v| v.as_object_mut()) {
@@ -122,5 +129,23 @@ mod tests {
         let block = r#"{"codebeacon": {"command": "codebeacon", "args": ["serve"]}}"#;
         let out = merge_mcp_json(existing, block).unwrap();
         assert!(out.contains("codebeacon"));
+    }
+
+    #[test]
+    fn merge_mcp_json_handles_jsonc_from_prior_install() {
+        let existing = r#"{
+  // codebeacon-start
+  "mcpServers": {
+    "codebeacon": {
+      "command": "codebeacon",
+      "args": ["serve"]
+    }
+  }
+  // codebeacon-end
+}"#;
+        let block = r#"{"codebeacon": {"command": "/new/codebeacon", "args": ["serve"]}}"#;
+        let out = merge_mcp_json(existing, block).unwrap();
+        assert!(out.contains("/new/codebeacon"));
+        assert!(!out.contains("// codebeacon"));
     }
 }
