@@ -6,9 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-13
+
 ### Added
 
-#### Loop Context Coordinator (v0.5.0)
+#### Loop Context Coordinator
 
 - **`[loop]` config** — `reindex` policy (`never` | `if_stale` | `every_n` | `always`), `stale_warn_threshold`, `max_iterations`, `prefetch_on_tick`, session persistence under `.codeindex/loop/`.
 - **MCP tools** — `loop_begin`, `loop_tick`, `loop_record`, `loop_end` (hidden when `[loop] enabled = false`).
@@ -16,6 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Compact encode** — `loop_tick` bundle short keys (`sid`, `it`, `sig`, `fc`, etc.).
 - **CLI** — `codebeacon loop begin|tick|record|end|watch|run`; `watch` emits `AGENT_LOOP_TICK_codebeacon` for Cursor `/loop`.
 - **Docs** — [LOOP.md](docs/LOOP.md), [worked/loop-sdk/](worked/loop-sdk/).
+
+### Changed
+
+- **README** — loop workflow + CLI example; essential tools table links to [LOOP.md](docs/LOOP.md).
+- **Skill** — [assets/skill/SKILL.md](assets/skill/SKILL.md) and [loop.md](assets/skill/references/loop.md) loop workflow section.
+- **CONFIG** — `[loop]` section in [CONFIG.md](docs/CONFIG.md).
 
 ## [0.4.0] - 2026-07-13
 
