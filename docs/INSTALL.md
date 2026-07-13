@@ -4,8 +4,37 @@
 
 ```bash
 cargo install codebeacon
+cd your-project && codebeacon init
 codebeacon install --platform cursor --project
-codebeacon init
+codebeacon serve    # or let install write MCP config for you
+```
+
+In your AI agent: call **`get_context`** first (not grep).
+
+## Install methods
+
+### From crates.io
+
+```bash
+cargo install codebeacon
+```
+
+### From npm
+
+```bash
+npx codebeacon
+```
+
+### From source
+
+```bash
+git clone https://github.com/lelorinel/codebeacon
+cd codebeacon
+cargo build --release
+# binary at target/release/codebeacon
+
+# Optional: tree-sitter extraction (Rust, Go, Python, TypeScript, C#)
+cargo build --release --features tree-sitter
 ```
 
 ## Platforms
@@ -30,16 +59,93 @@ List all: `codebeacon install --list`
 
 ## MCP configuration
 
+Standard MCP server entry (works for most clients):
+
 ```json
 {
-  "codebeacon": {
-    "command": "codebeacon",
-    "args": ["serve"]
+  "mcpServers": {
+    "codebeacon": {
+      "command": "codebeacon",
+      "args": ["serve"]
+    }
   }
 }
 ```
 
 With security: `"args": ["serve", "--security"]`
+
+With file tools (local LLMs): `"args": ["serve", "--fs-tools", "--root", "/path/to/project"]`
+
+## Client integration
+
+### Claude Code
+
+Add to your project's `.mcp.json` (see above), or:
+
+```bash
+claude mcp add codebeacon -- codebeacon serve
+```
+
+Claude Code sets `CLAUDE_PROJECT_DIR` when launching the server — no `--root` needed.
+
+### Cursor
+
+`codebeacon install --platform cursor --project` writes `.cursor/mcp.json`. Cursor sets `CURSOR_WORKSPACE` automatically.
+
+### VS Code, Zed, Cline
+
+These clients launch MCP servers with `cwd` set to the workspace folder, so Codebeacon auto-detects the project root with no extra configuration.
+
+### LM Studio and other local AI environments
+
+Local models often lack native file access and are not trained to call MCP tools automatically. Use `--fs-tools` and an explicit `--root`:
+
+```json
+{
+  "mcpServers": {
+    "codebeacon": {
+      "command": "codebeacon",
+      "args": ["serve", "--fs-tools", "--root", "/path/to/your/project"]
+    }
+  }
+}
+```
+
+#### Getting local models to use the tools
+
+**Option 1 — System prompt (recommended).** In LM Studio go to **Settings → Model → System Prompt** and add:
+
+```
+You have access to codebeacon MCP tools for exploring this codebase.
+ALWAYS use them instead of guessing from memory:
+
+- get_context       → call this first to understand the project structure
+- drill_package     → full file and symbol list for a package
+- find_definition   → locate where a symbol is defined
+- find_references   → find all usages of a symbol
+- get_dependents    → what breaks if this file changes
+- read_file         → read a source file
+
+Never answer code questions without calling at least get_context first.
+```
+
+**Option 2 — Mention the tool in your query:**
+
+```
+Use get_context to find the Rust microservice in this project and explain what it does.
+```
+
+For compact MCP output (default), local models may prefer verbose JSON — set `[compact] enabled = false` in `.codeindex.toml`. See [CONFIG.md](CONFIG.md) and [BENCHMARKS.md](BENCHMARKS.md).
+
+### Manual root override
+
+If auto-detection doesn't work:
+
+```bash
+codebeacon serve --root /path/to/your/project
+```
+
+Workspace root resolution order is documented in [CONFIG.md](CONFIG.md#workspace-root-resolution).
 
 ## Uninstall
 
@@ -55,9 +161,21 @@ Idempotent markers (`<!-- codebeacon-start -->`) protect user edits outside Code
 Two hook types (do not confuse them):
 
 1. **Discovery** (`assets/hooks/codebeacon-context.sh`) — nudges agent to use `get_context` when `.codeindex/` exists
-2. **Security** (`assets/hooks/codebeacon-security.sh`) — blocks/warns on CWE-190 patterns
+2. **Security** (`assets/hooks/codebeacon-security.sh`) — blocks/warns on CWE patterns
 
 See `assets/hooks/cursor-hooks.json.example`. After `codebeacon install --platform cursor --project`, copy `.cursor/hooks.json.example` to `.cursor/hooks.json`.
+
+### Cursor security hook
+
+Merge from [`assets/hooks/cursor-hooks.json.example`](../assets/hooks/cursor-hooks.json.example). Script: [`assets/hooks/codebeacon-security.sh`](../assets/hooks/codebeacon-security.sh).
+
+### Claude Code security hook
+
+Merge [`assets/hooks/claude-settings.security.example.json`](../assets/hooks/claude-settings.security.example.json) into your Claude settings. Copy [`assets/hooks/codebeacon-security.sh`](../assets/hooks/codebeacon-security.sh) to `.claude/hooks/` (or `~/.claude/hooks/`).
+
+### OpenCode (force MCP path)
+
+See [opencode-security.example.jsonc](opencode-security.example.jsonc) — deny native `edit` and allow Codebeacon MCP file tools with `--fs-tools --security`.
 
 ## Git post-commit hook
 

@@ -1,4 +1,10 @@
+use crate::compact::{
+    compact_mode,
+    encode_index_response, encode_package_response, encode_query_matches, expand_path,
+    read_dict, record_usage, resolve_file_arg_with_root, session_for_repo, DictSession,
+};
 use crate::config::codeindex_dir;
+use crate::config_file::CompactConfig;
 use crate::graph::{persistence as graph_persistence, DependencyGraph};
 use crate::indexer::writer::{read_index, read_package};
 use crate::lsp::pool::LspPool;
@@ -19,6 +25,8 @@ pub struct RepoCtx {
     pub root: PathBuf,
     pub lsp_pool: Mutex<LspPool>,
     pub security: SecurityPolicy,
+    pub compact: CompactConfig,
+    pub dict_session: Mutex<DictSession>,
 }
 
 impl RepoCtx {
@@ -29,6 +37,36 @@ impl RepoCtx {
     fn load_graph(&self) -> DependencyGraph {
         let path = self.codeindex().join("graph.bin");
         graph_persistence::load(&path).unwrap_or_default()
+    }
+
+    fn dict_session_mut(&self) -> std::sync::MutexGuard<'_, DictSession> {
+        self.dict_session.lock().unwrap()
+    }
+
+    fn ensure_dict_session(&self) {
+        let mut session = self.dict_session_mut();
+        if session.paths.is_empty() {
+            *session = session_for_repo(&self.codeindex());
+        }
+    }
+
+    fn resolve_file(&self, file: &str) -> PathBuf {
+        self.ensure_dict_session();
+        let session = self.dict_session.lock().unwrap();
+        resolve_file_arg_with_root(&session, &self.root, file)
+    }
+
+    fn maybe_record_usage(&self, tool: &str, key: &str, compact: bool) {
+        if compact {
+            let _ = record_usage(&self.codeindex(), tool, key);
+        }
+    }
+
+    /// Map a repo-relative path to a dict ref (`p1`) when compact mode is on.
+    fn path_ref(&self, path: &str) -> String {
+        self.ensure_dict_session();
+        let mut session = self.dict_session_mut();
+        session.path_id(path)
     }
 }
 
@@ -115,10 +153,21 @@ pub fn handle_get_context(ctx: &ToolContext, args: &Value) -> Result<Value> {
     }
 
     if repos.len() == 1 {
-        // Single repo (or filtered to one): original output format
         let repo = repos[0];
+        let compact = compact_mode(args, &repo.compact);
         match read_index(&repo.codeindex())? {
-            Some(index) => return Ok(text_content(serde_json::to_string_pretty(&index)?)),
+            Some(index) => {
+                let text = if compact {
+                    repo.ensure_dict_session();
+                    let base = read_dict(&repo.codeindex())?;
+                    let mut session = repo.dict_session_mut();
+                    let out = encode_index_response(&index, &mut session, base.as_ref());
+                    serde_json::to_string_pretty(&out)?
+                } else {
+                    serde_json::to_string_pretty(&index)?
+                };
+                return Ok(text_content(text));
+            }
             None => return Ok(text_content(format!(
                 "No index found for repo '{}'.\n\
                  Call `init_workspace` to build the index (may take a moment for large repos).",
@@ -130,11 +179,22 @@ pub fn handle_get_context(ctx: &ToolContext, args: &Value) -> Result<Value> {
     // Multi-repo: { repos: [ { repo, index | error }, … ] }
     let mut all = vec![];
     for repo in repos {
+        let compact = compact_mode(args, &repo.compact);
         match read_index(&repo.codeindex())? {
-            Some(index) => all.push(serde_json::json!({
-                "repo": repo.name,
-                "index": index,
-            })),
+            Some(index) => {
+                let payload = if compact {
+                    repo.ensure_dict_session();
+                    let base = read_dict(&repo.codeindex())?;
+                    let mut session = repo.dict_session_mut();
+                    encode_index_response(&index, &mut session, base.as_ref())
+                } else {
+                    serde_json::json!(index)
+                };
+                all.push(serde_json::json!({
+                    "repo": repo.name,
+                    "index": payload,
+                }));
+            }
             None => all.push(serde_json::json!({
                 "repo": repo.name,
                 "status": "not indexed — call `init_workspace` to build the index",
@@ -167,7 +227,17 @@ pub fn handle_drill_package(ctx: &ToolContext, args: &Value) -> Result<Value> {
 
     for repo in repos {
         if let Some(pkg) = read_package(pkg_name, &repo.codeindex())? {
-            let text = serde_json::to_string_pretty(&pkg)?;
+            let compact = compact_mode(args, &repo.compact);
+            repo.maybe_record_usage("drill_package", pkg_name, compact);
+            let text = if compact {
+                repo.ensure_dict_session();
+                let base = read_dict(&repo.codeindex())?;
+                let mut session = repo.dict_session_mut();
+                let out = encode_package_response(&pkg, &mut session, base.as_ref());
+                serde_json::to_string_pretty(&out)?
+            } else {
+                serde_json::to_string_pretty(&pkg)?
+            };
             return Ok(text_content(if add_prefix {
                 format!("[repo: {}]\n{}", repo.name, text)
             } else {
@@ -196,11 +266,8 @@ pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> 
         args["character"].as_u64(),
     ) {
         for repo in &repos {
-            let abs_path = if std::path::Path::new(file).is_absolute() {
-                std::path::PathBuf::from(file)
-            } else {
-                repo.root.join(file)
-            };
+            let compact = compact_mode(args, &repo.compact);
+            let abs_path = repo.resolve_file(file);
             if !abs_path.exists() { continue; }
             if let Some(lang) = crate::config::detect_language(&abs_path) {
                 let mut pool = repo.lsp_pool.lock().unwrap();
@@ -216,10 +283,15 @@ pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> 
                                 } else {
                                     String::new()
                                 };
+                                let path_part = if compact {
+                                    repo.path_ref(&rel.to_string_lossy())
+                                } else {
+                                    rel.display().to_string()
+                                };
                                 return Ok(text_content(format!(
                                     "{}{}:{} (via LSP)",
                                     prefix,
-                                    rel.display(),
+                                    path_part,
                                     def_line
                                 )));
                             }
@@ -235,6 +307,10 @@ pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> 
     // Index-based fallback: search all (or filtered) repos
     let mut found: Vec<String> = vec![];
     for repo in &repos {
+        let compact = compact_mode(args, &repo.compact);
+        if compact {
+            repo.maybe_record_usage("find_definition", symbol, true);
+        }
         let packages_dir = repo.codeindex().join("packages");
         let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
             .into_iter()
@@ -255,10 +331,16 @@ pub fn handle_find_definition(ctx: &ToolContext, args: &Value) -> Result<Value> 
                                 } else {
                                     String::new()
                                 };
+                                let path_str = file.path.to_string_lossy();
+                                let path_part = if compact {
+                                    repo.path_ref(&path_str)
+                                } else {
+                                    path_str.into_owned()
+                                };
                                 found.push(format!(
                                     "{}{}:{} — {}",
                                     prefix,
-                                    file.path.display(),
+                                    path_part,
                                     sym.line,
                                     sym.signature
                                 ));
@@ -294,11 +376,8 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
         args["character"].as_u64(),
     ) {
         for repo in &repos {
-            let abs_path = if std::path::Path::new(file).is_absolute() {
-                std::path::PathBuf::from(file)
-            } else {
-                repo.root.join(file)
-            };
+            let compact = compact_mode(args, &repo.compact);
+            let abs_path = repo.resolve_file(file);
             if !abs_path.exists() { continue; }
             if let Some(lang) = crate::config::detect_language(&abs_path) {
                 let mut pool = repo.lsp_pool.lock().unwrap();
@@ -319,7 +398,12 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
                                         } else {
                                             String::new()
                                         };
-                                        format!("{}{}:{}", prefix, rel.display(), r.line)
+                                        let path_part = if compact {
+                                            repo.path_ref(&rel.to_string_lossy())
+                                        } else {
+                                            rel.display().to_string()
+                                        };
+                                        format!("{}{}:{}", prefix, path_part, r.line)
                                     })
                                     .collect();
                                 return Ok(text_content(format!(
@@ -339,6 +423,7 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
 
     // Try to auto-locate the symbol's definition in the index, then use LSP
     'outer: for repo in &repos {
+        let compact = compact_mode(args, &repo.compact);
         let packages_dir = repo.codeindex().join("packages");
         let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
             .into_iter()
@@ -379,10 +464,15 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
                                                             } else {
                                                                 String::new()
                                                             };
+                                                            let path_part = if compact {
+                                                                repo.path_ref(&rel.to_string_lossy())
+                                                            } else {
+                                                                rel.display().to_string()
+                                                            };
                                                             format!(
                                                                 "{}{}:{}",
                                                                 prefix,
-                                                                rel.display(),
+                                                                path_part,
                                                                 r.line
                                                             )
                                                         })
@@ -414,6 +504,10 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
     // Final fallback: index substring search
     let mut found: Vec<String> = vec![];
     for repo in &repos {
+        let compact = compact_mode(args, &repo.compact);
+        if compact {
+            repo.maybe_record_usage("find_references", symbol, true);
+        }
         let packages_dir = repo.codeindex().join("packages");
         let mut pkg_files: Vec<_> = std::fs::read_dir(&packages_dir)
             .into_iter()
@@ -434,10 +528,16 @@ pub fn handle_find_references(ctx: &ToolContext, args: &Value) -> Result<Value> 
                                 } else {
                                     String::new()
                                 };
+                                let path_str = file.path.to_string_lossy();
+                                let path_part = if compact {
+                                    repo.path_ref(&path_str)
+                                } else {
+                                    path_str.into_owned()
+                                };
                                 found.push(format!(
                                     "{}{}:{} — {} [index fallback]",
                                     prefix,
-                                    file.path.display(),
+                                    path_part,
                                     sym.line,
                                     sym.signature
                                 ));
@@ -478,12 +578,25 @@ pub fn handle_get_dependents(ctx: &ToolContext, args: &Value) -> Result<Value> {
     };
 
     let repos = ctx.repos_for(repo_hint);
+
+    let resolved_path = repos
+        .first()
+        .map(|r| {
+            let abs = r.resolve_file(file_path);
+            abs.strip_prefix(&r.root)
+                .unwrap_or(&abs)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| file_path.to_string());
+
     let mut all_dependents: Vec<String> = vec![];
 
     for repo in &repos {
+        let compact = compact_mode(args, &repo.compact);
         let graph = repo.load_graph();
-        let abs_path = repo.root.join(file_path);
-        let rel_path = PathBuf::from(file_path);
+        let abs_path = repo.root.join(&resolved_path);
+        let rel_path = PathBuf::from(&resolved_path);
         let dependents = {
             let by_abs = graph.reverse_neighbors(&abs_path);
             if !by_abs.is_empty() {
@@ -499,7 +612,12 @@ pub fn handle_get_dependents(ctx: &ToolContext, args: &Value) -> Result<Value> {
             } else {
                 String::new()
             };
-            all_dependents.push(format!("{}{}", prefix, rel.display()));
+            let path_part = if compact {
+                repo.path_ref(&rel.to_string_lossy())
+            } else {
+                rel.display().to_string()
+            };
+            all_dependents.push(format!("{prefix}{path_part}"));
         }
     }
 
@@ -550,7 +668,20 @@ pub fn handle_query_context(ctx: &ToolContext, args: &Value) -> Result<Value> {
     for repo in repos {
         match repo_query_ctx(repo) {
             Ok(qctx) => {
-                let text = qctx.format_query(question, 10);
+                let compact = compact_mode(args, &repo.compact);
+                repo.maybe_record_usage("query_context", question, compact);
+                let text = if compact {
+                    let matches = qctx.query(question, 10);
+                    repo.ensure_dict_session();
+                    let mut session = repo.dict_session_mut();
+                    let compact_matches = encode_query_matches(&matches, &mut session);
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "question": question,
+                        "matches": compact_matches,
+                    }))?
+                } else {
+                    qctx.format_query(question, 10)
+                };
                 return Ok(text_content(if add_prefix {
                     format!("[repo: {}]\n{text}", repo.name)
                 } else {
@@ -577,7 +708,24 @@ pub fn handle_shortest_path(ctx: &ToolContext, args: &Value) -> Result<Value> {
 
     for repo in repos {
         if let Ok(qctx) = repo_query_ctx(repo) {
-            let path = qctx.path_between(from, to)?;
+            let compact = compact_mode(args, &repo.compact);
+            let from_resolved = {
+                repo.ensure_dict_session();
+                let session = repo.dict_session.lock().unwrap();
+                expand_path(&session, from)
+            };
+            let to_resolved = {
+                let session = repo.dict_session.lock().unwrap();
+                expand_path(&session, to)
+            };
+            let mut path = qctx.path_between(&from_resolved, &to_resolved)?;
+            if compact {
+                path = path
+                    .split(" --imports--> ")
+                    .map(|s| repo.path_ref(s))
+                    .collect::<Vec<_>>()
+                    .join(" --imports--> ");
+            }
             let prefix = if ctx.multi() && repo_filter.is_none() {
                 format!("[repo: {}] ", repo.name)
             } else {
@@ -596,7 +744,12 @@ pub fn handle_hotspots(ctx: &ToolContext, args: &Value) -> Result<Value> {
 
     for repo in repos {
         if let Ok(qctx) = repo_query_ctx(repo) {
-            let text = qctx.hotspots_text(limit);
+            let compact = compact_mode(args, &repo.compact);
+            let text = if compact {
+                qctx.hotspots_compact_text(limit, |path| repo.path_ref(path))
+            } else {
+                qctx.hotspots_text(limit)
+            };
             let prefix = if ctx.multi() && repo_filter.is_none() {
                 format!("[repo: {}]\n", repo.name)
             } else {
@@ -640,7 +793,16 @@ pub fn handle_get_index_summary(ctx: &ToolContext, args: &Value) -> Result<Value
 
     for repo in repos {
         if let Some(index) = read_index(&repo.codeindex())? {
-            let text = serde_json::to_string_pretty(&index)?;
+            let compact = compact_mode(args, &repo.compact);
+            let text = if compact {
+                repo.ensure_dict_session();
+                let base = read_dict(&repo.codeindex())?;
+                let mut session = repo.dict_session_mut();
+                let out = encode_index_response(&index, &mut session, base.as_ref());
+                serde_json::to_string_pretty(&out)?
+            } else {
+                serde_json::to_string_pretty(&index)?
+            };
             let prefix = if ctx.multi() && repo_filter.is_none() {
                 format!("[repo: {}]\n", repo.name)
             } else {
@@ -849,7 +1011,7 @@ pub fn handle_verify_security(ctx: &ToolContext, args: &Value) -> Result<Value> 
 
     let text = match &action {
         GateAction::Allow if report.findings.is_empty() => format!(
-            "No CWE-190 allocation sites found in `{}` ({} ms).",
+            "No security issues found in `{}` ({} ms).",
             report.path, report.elapsed_ms
         ),
         GateAction::Allow => format!(
@@ -911,6 +1073,7 @@ pub fn handle_list_directory(ctx: &ToolContext, args: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compact::{build_dict_from_packages, write_dict};
     use crate::types::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -918,13 +1081,19 @@ mod tests {
     /// Build a single-repo ToolContext pointing at `tmp`.
     fn single_ctx(tmp: &TempDir) -> ToolContext {
         ToolContext {
-            repos: vec![RepoCtx {
-                name: "test".into(),
-                root: tmp.path().to_path_buf(),
-                lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                security: SecurityPolicy::default(),
-            }],
+            repos: vec![test_repo_ctx("test", tmp.path())],
             fs_tools: true,
+        }
+    }
+
+    fn test_repo_ctx(name: &str, root: &std::path::Path) -> RepoCtx {
+        RepoCtx {
+            name: name.into(),
+            root: root.to_path_buf(),
+            lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
+            security: SecurityPolicy::default(),
+            compact: CompactConfig::default(),
+            dict_session: Mutex::new(DictSession::default()),
         }
     }
 
@@ -1204,7 +1373,10 @@ mod tests {
         setup_codeindex_multi(&tmp);
         let ctx = single_ctx(&tmp);
         let result =
-            handle_find_definition(&ctx, &serde_json::json!({"symbol": "validate"}))
+            handle_find_definition(
+                &ctx,
+                &serde_json::json!({"symbol": "validate", "compact": false}),
+            )
                 .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("src/auth.rs"), "expected auth.rs in: {text}");
@@ -1249,7 +1421,10 @@ mod tests {
         .unwrap();
         let ctx = single_ctx(&tmp);
         let result =
-            handle_get_dependents(&ctx, &serde_json::json!({"file": "src/auth.rs"}))
+            handle_get_dependents(
+                &ctx,
+                &serde_json::json!({"file": "src/auth.rs", "compact": false}),
+            )
                 .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("api.rs"));
@@ -1266,18 +1441,8 @@ mod tests {
 
         let ctx = ToolContext {
             repos: vec![
-                RepoCtx {
-                    name: "repoA".into(),
-                    root: tmp_a.path().to_path_buf(),
-                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                    security: SecurityPolicy::default(),
-                },
-                RepoCtx {
-                    name: "repoB".into(),
-                    root: tmp_b.path().to_path_buf(),
-                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                    security: SecurityPolicy::default(),
-                },
+                test_repo_ctx("repoA", tmp_a.path()),
+                test_repo_ctx("repoB", tmp_b.path()),
             ],
             fs_tools: false,
         };
@@ -1298,18 +1463,8 @@ mod tests {
 
         let ctx = ToolContext {
             repos: vec![
-                RepoCtx {
-                    name: "repoA".into(),
-                    root: tmp_a.path().to_path_buf(),
-                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                    security: SecurityPolicy::default(),
-                },
-                RepoCtx {
-                    name: "repoB".into(),
-                    root: tmp_b.path().to_path_buf(),
-                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                    security: SecurityPolicy::default(),
-                },
+                test_repo_ctx("repoA", tmp_a.path()),
+                test_repo_ctx("repoB", tmp_b.path()),
             ],
             fs_tools: false,
         };
@@ -1362,18 +1517,8 @@ mod tests {
 
         let ctx = ToolContext {
             repos: vec![
-                RepoCtx {
-                    name: "repoA".into(),
-                    root: tmp_a.path().to_path_buf(),
-                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                    security: SecurityPolicy::default(),
-                },
-                RepoCtx {
-                    name: "repoB".into(),
-                    root: tmp_b.path().to_path_buf(),
-                    lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                    security: SecurityPolicy::default(),
-                },
+                test_repo_ctx("repoA", tmp_a.path()),
+                test_repo_ctx("repoB", tmp_b.path()),
             ],
             fs_tools: false,
         };
@@ -1397,17 +1542,16 @@ mod tests {
             indexer.full_index().unwrap();
         }
         let ctx = ToolContext {
-            repos: vec![RepoCtx {
-                name: "simple_rust".into(),
-                root: root.clone(),
-                lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                security: SecurityPolicy::default(),
-            }],
+            repos: vec![test_repo_ctx("simple_rust", &root)],
             fs_tools: false,
         };
         let result = handle_shortest_path(
             &ctx,
-            &serde_json::json!({"from": "src/auth.rs", "to": "src/db.rs"}),
+            &serde_json::json!({
+                "from": "src/auth.rs",
+                "to": "src/db.rs",
+                "compact": false,
+            }),
         )
         .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
@@ -1426,17 +1570,126 @@ mod tests {
             indexer.full_index().unwrap();
         }
         let ctx = ToolContext {
-            repos: vec![RepoCtx {
-                name: "simple_rust".into(),
-                root,
-                lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
-                security: SecurityPolicy::default(),
-            }],
+            repos: vec![test_repo_ctx("simple_rust", &root)],
             fs_tools: false,
         };
-        let result = handle_hotspots(&ctx, &serde_json::json!({"limit": 5})).unwrap();
+        let result = handle_hotspots(&ctx, &serde_json::json!({"limit": 5, "compact": false})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("db.rs"));
         assert!(text.contains("dependents"));
+    }
+
+    #[test]
+    fn get_context_compact_uses_short_keys() {
+        let tmp = TempDir::new().unwrap();
+        setup_codeindex(&tmp);
+        let ctx = single_ctx(&tmp);
+        let result = handle_get_context(&ctx, &serde_json::json!({})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"pk\""), "expected compact pk key in: {text}");
+        assert!(text.contains("\"dict\""), "expected dict block in: {text}");
+    }
+
+    #[test]
+    fn get_context_legacy_when_compact_false() {
+        let tmp = TempDir::new().unwrap();
+        setup_codeindex(&tmp);
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_get_context(&ctx, &serde_json::json!({"compact": false})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"packages\""), "expected legacy packages key in: {text}");
+        assert!(!text.contains("\"pk\""), "compact keys should be absent: {text}");
+    }
+
+    #[test]
+    fn drill_package_compact_uses_path_refs() {
+        let tmp = TempDir::new().unwrap();
+        setup_codeindex(&tmp);
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_drill_package(&ctx, &serde_json::json!({"name": "auth"})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"p\""), "expected path ref key in: {text}");
+        assert!(text.contains("\"package\""), "expected package wrapper in: {text}");
+    }
+
+    #[test]
+    fn find_definition_compact_uses_path_refs() {
+        let tmp = TempDir::new().unwrap();
+        setup_codeindex_multi(&tmp);
+        let ctx = single_ctx(&tmp);
+        let result =
+            handle_find_definition(&ctx, &serde_json::json!({"symbol": "validate"}))
+                .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("p1:") || text.contains("p2:"), "expected dict path ref in: {text}");
+        assert!(!text.contains("src/auth.rs"), "full path should be compressed: {text}");
+    }
+
+    #[test]
+    fn get_dependents_resolves_dict_file_arg() {
+        let tmp = TempDir::new().unwrap();
+        let mut g = crate::graph::DependencyGraph::new();
+        g.add_dependency(
+            &PathBuf::from("src/api.rs"),
+            &PathBuf::from("src/auth.rs"),
+        );
+        let ci = tmp.path().join(".codeindex");
+        std::fs::create_dir_all(&ci).unwrap();
+        crate::graph::persistence::save(&g, &ci.join("graph.bin")).unwrap();
+        let packages = vec![
+            PackageDetail {
+                name: "auth".into(),
+                files: vec![FileEntry {
+                    path: PathBuf::from("src/auth.rs"),
+                    symbols: vec![],
+                    depends_on: vec![],
+                    depended_by: vec![],
+                }],
+            },
+            PackageDetail {
+                name: "api".into(),
+                files: vec![FileEntry {
+                    path: PathBuf::from("src/api.rs"),
+                    symbols: vec![],
+                    depends_on: vec![],
+                    depended_by: vec![],
+                }],
+            },
+        ];
+        let dict = build_dict_from_packages(&packages, 0);
+        write_dict(&dict, &ci).unwrap();
+        let ctx = single_ctx(&tmp);
+        let auth_id = dict
+            .paths
+            .iter()
+            .find(|(_, p)| p.as_str() == "src/auth.rs")
+            .map(|(id, _)| id.clone())
+            .unwrap();
+        let result =
+            handle_get_dependents(&ctx, &serde_json::json!({"file": auth_id})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains('p'),
+            "expected compact path ref for dependent in: {text}"
+        );
+    }
+
+    #[test]
+    fn dict_rev_increments_on_build() {
+        let packages = vec![PackageDetail {
+            name: "auth".into(),
+            files: vec![FileEntry {
+                path: PathBuf::from("src/auth.rs"),
+                symbols: vec![],
+                depends_on: vec![],
+                depended_by: vec![],
+            }],
+        }];
+        let d1 = build_dict_from_packages(&packages, 0);
+        assert_eq!(d1.rev, 1);
+        let d2 = build_dict_from_packages(&packages, d1.rev);
+        assert_eq!(d2.rev, 2);
     }
 }

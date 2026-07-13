@@ -51,6 +51,13 @@ pub fn text_content(text: impl Into<String>) -> Value {
     })
 }
 
+fn compact_property() -> Value {
+    serde_json::json!({
+        "type": "boolean",
+        "description": "Return token-compressed response with dictionary refs. Default from [compact] enabled in .codeindex.toml (true). Set false for local LLMs."
+    })
+}
+
 pub fn tool_list(fs_tools: bool, security: bool) -> Value {
     let mut tools = vec![
         serde_json::json!({
@@ -60,7 +67,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                 "type": "object",
                 "properties": {
                     "files": { "type": "array", "items": { "type": "string" } },
-                    "repo": { "type": "string", "description": "Repo name to query (only needed in a multi-repo workspace)" }
+                    "repo": { "type": "string", "description": "Repo name to query (only needed in a multi-repo workspace)" },
+                    "compact": compact_property()
                 },
                 "required": []
             }
@@ -72,7 +80,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "Package name, or 'repo/package' in a multi-repo workspace" },
-                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" },
+                    "compact": compact_property()
                 },
                 "required": ["name"]
             }
@@ -87,7 +96,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                     "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
                     "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
                     "character": { "type": "integer", "description": "0-based character offset (required with file)" },
-                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" },
+                    "compact": compact_property()
                 },
                 "required": ["symbol"]
             }
@@ -102,7 +112,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                     "file": { "type": "string", "description": "Absolute or repo-relative file path (enables LSP lookup)" },
                     "line": { "type": "integer", "description": "0-based line of the symbol (required with file)" },
                     "character": { "type": "integer", "description": "0-based character offset (required with file)" },
-                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" }
+                    "repo": { "type": "string", "description": "Repo name to search (only needed in a multi-repo workspace)" },
+                    "compact": compact_property()
                 },
                 "required": ["symbol"]
             }
@@ -137,7 +148,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                 "type": "object",
                 "properties": {
                     "question": { "type": "string", "description": "Search query / keywords" },
-                    "repo": { "type": "string", "description": "Repo name (multi-repo workspace)" }
+                    "repo": { "type": "string", "description": "Repo name (multi-repo workspace)" },
+                    "compact": compact_property()
                 },
                 "required": ["question"]
             }
@@ -150,7 +162,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                 "properties": {
                     "from": { "type": "string" },
                     "to": { "type": "string" },
-                    "repo": { "type": "string" }
+                    "repo": { "type": "string" },
+                    "compact": compact_property()
                 },
                 "required": ["from", "to"]
             }
@@ -184,7 +197,8 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "repo": { "type": "string" }
+                    "repo": { "type": "string" },
+                    "compact": compact_property()
                 },
                 "required": []
             }
@@ -262,7 +276,7 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
     if security {
         tools.push(serde_json::json!({
             "name": "verify_security",
-            "description": "Run CWE-190 formal verification on a code fragment without writing to disk. Returns SAT witness, UNSAT proof, or pattern-only warnings per policy.",
+            "description": "Run security verification on a code fragment without writing to disk. Checks CWE-190/131/191/369/680 (Z3) and optional pattern CWEs per policy. Returns SAT witness, UNSAT proof, or pattern-only warnings.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

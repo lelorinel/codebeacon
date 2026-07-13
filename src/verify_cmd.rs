@@ -53,7 +53,7 @@ pub fn print_human_output(out: &VerifyCliOutput) {
     match out.action {
         "allow" if out.report.findings.is_empty() => {
             println!(
-                "No CWE-190 allocation sites found in `{}` ({} ms).",
+                "No security issues found in `{}` ({} ms).",
                 out.report.path, out.report.elapsed_ms
             );
         }

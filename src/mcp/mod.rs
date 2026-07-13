@@ -1,6 +1,7 @@
 pub mod protocol;
 pub mod tools;
 
+use crate::compact::DictSession;
 use crate::config;
 use crate::lsp::client::path_to_uri;
 use crate::lsp::pool::LspPool;
@@ -181,6 +182,8 @@ pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_secu
                 root,
                 lsp_pool,
                 security: cfg.security.to_policy(cli_security),
+                compact: cfg.compact.clone(),
+                dict_session: Mutex::new(DictSession::default()),
             }
         })
         .collect();

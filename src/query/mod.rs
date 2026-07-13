@@ -316,6 +316,29 @@ impl RepoQueryCtx {
         out
     }
 
+    /// Like `hotspots_text`, but maps each path through `path_ref` (compact dict IDs).
+    pub fn hotspots_compact_text(
+        &self,
+        limit: usize,
+        path_ref: impl Fn(&str) -> String,
+    ) -> String {
+        let hs = graph_hotspots(&self.graph, limit);
+        if hs.is_empty() {
+            return "No hotspots (empty graph).".into();
+        }
+        let mut out = format!("Top {limit} hotspots (by dependent count):\n\n");
+        for (i, (path, count)) in hs.iter().enumerate() {
+            let path_str = path.to_string_lossy();
+            out.push_str(&format!(
+                "{}. {} — {} dependents\n",
+                i + 1,
+                path_ref(&path_str),
+                count
+            ));
+        }
+        out
+    }
+
     pub fn count_files(&self) -> usize {
         self.packages.values().map(|p| p.files.len()).sum()
     }

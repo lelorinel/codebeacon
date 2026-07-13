@@ -1,4 +1,6 @@
+use crate::security::cwe::{default_enabled_cwes, normalize_cwe_id};
 use crate::security::findings::{ProofStatus, SecurityFinding, VerifyReport};
+use std::collections::HashSet;
 
 /// How aggressively the gate treats inconclusive results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,6 +33,8 @@ pub struct SecurityPolicy {
     pub z3_timeout_ms: u64,
     /// When true, Unknown is treated like block even in Balanced mode.
     pub block_on_unknown: bool,
+    /// Enabled CWE identifiers (numeric strings, e.g. "190").
+    pub enabled_cwes: HashSet<String>,
 }
 
 impl Default for SecurityPolicy {
@@ -40,7 +44,18 @@ impl Default for SecurityPolicy {
             mode: PolicyMode::Balanced,
             z3_timeout_ms: 5_000,
             block_on_unknown: false,
+            enabled_cwes: default_enabled_cwes(),
         }
+    }
+}
+
+impl SecurityPolicy {
+    pub fn cwe_enabled(&self, id: &str) -> bool {
+        self.enabled_cwes.contains(&normalize_cwe_id(id))
+    }
+
+    pub fn any_cwe_enabled(&self, ids: &[&str]) -> bool {
+        ids.iter().any(|id| self.cwe_enabled(id))
     }
 }
 

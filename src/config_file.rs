@@ -33,6 +33,9 @@ pub struct CodeIndexConfig {
 
     #[serde(default)]
     pub extractor: ExtractorConfig,
+
+    #[serde(default)]
+    pub compact: CompactConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -49,6 +52,7 @@ impl Default for CodeIndexConfig {
             lsp: LspConfig::default(),
             security: SecurityConfig::default(),
             extractor: ExtractorConfig::default(),
+            compact: CompactConfig::default(),
         }
     }
 }
@@ -114,6 +118,10 @@ pub struct SecurityConfig {
 
     #[serde(default)]
     pub block_on_unknown: bool,
+
+    /// Enabled CWE ids (e.g. "190", "131"). Empty → Z3 defaults on, pattern CWEs off.
+    #[serde(default)]
+    pub enabled_cwes: Vec<String>,
 }
 
 fn default_security_mode() -> String {
@@ -131,17 +139,50 @@ impl Default for SecurityConfig {
             mode: default_security_mode(),
             z3_timeout_ms: default_z3_timeout_ms(),
             block_on_unknown: false,
+            enabled_cwes: Vec::new(),
         }
     }
 }
 
 impl SecurityConfig {
     pub fn to_policy(&self, cli_security: bool) -> SecurityPolicy {
+        use crate::security::cwe::{default_enabled_cwes, normalize_cwe_id};
+        use std::collections::HashSet;
+
+        let enabled_cwes = if self.enabled_cwes.is_empty() {
+            default_enabled_cwes()
+        } else {
+            self.enabled_cwes
+                .iter()
+                .map(|id| normalize_cwe_id(id))
+                .collect::<HashSet<_>>()
+        };
+
         SecurityPolicy {
             enabled: self.enabled || cli_security,
             mode: PolicyMode::parse(&self.mode).unwrap_or_default(),
             z3_timeout_ms: self.z3_timeout_ms,
             block_on_unknown: self.block_on_unknown,
+            enabled_cwes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompactConfig {
+    /// When true (default), MCP index tools return token-compressed JSON with dict refs.
+    #[serde(default = "default_compact_enabled")]
+    pub enabled: bool,
+}
+
+fn default_compact_enabled() -> bool {
+    true
+}
+
+impl Default for CompactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_compact_enabled(),
         }
     }
 }
@@ -180,6 +221,7 @@ mod tests {
         assert_eq!(cfg.lsp_concurrency, 2);
         assert_eq!(cfg.lsp_enrich_timeout_secs, 60);
         assert!(cfg.lsp.overrides.is_empty());
+        assert!(cfg.compact.enabled);
     }
 
     #[test]
@@ -231,6 +273,23 @@ block_on_unknown = true
         assert!(policy.enabled);
         assert_eq!(policy.z3_timeout_ms, 3000);
         assert!(policy.block_on_unknown);
+        assert!(policy.cwe_enabled("190"));
+    }
+
+    #[test]
+    fn load_parses_enabled_cwes() {
+        let tmp = TempDir::new().unwrap();
+        let config_content = r#"
+[security]
+enabled = true
+enabled_cwes = ["190", "134", "78"]
+"#;
+        fs::write(tmp.path().join(".codeindex.toml"), config_content).unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        let policy = cfg.security.to_policy(false);
+        assert!(policy.cwe_enabled("134"));
+        assert!(policy.cwe_enabled("78"));
+        assert!(!policy.cwe_enabled("131"));
     }
 
     #[test]
@@ -247,6 +306,18 @@ max_tree_sitter_bytes = 256000
         assert_eq!(cfg.extractor.mode, "tree-sitter");
         assert_eq!(cfg.extractor.parse_timeout_ms, 100);
         assert_eq!(cfg.extractor.max_tree_sitter_bytes, 256_000);
+    }
+
+    #[test]
+    fn load_parses_compact_section() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join(".codeindex.toml"),
+            "[compact]\nenabled = false\n",
+        )
+        .unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(!cfg.compact.enabled);
     }
 
     #[test]

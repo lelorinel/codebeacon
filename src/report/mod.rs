@@ -124,7 +124,7 @@ pub fn generate(opts: &ReportOptions) -> Result<String> {
     md.push_str("- **LSP precision** — `find_definition` / `find_references` MCP tools\n");
     md.push_str("- **Impact analysis** — `get_dependents` / `codebeacon dependents`\n");
     md.push_str("- **Multi-repo** — MCP `repo` argument for workspaces\n");
-    md.push_str("- **Z3 security gate** — CWE-190 formal verification (`codebeacon verify`)\n\n");
+    md.push_str("- **Z3 security gate** — CWE-190/131/191/369/680 formal verification (`codebeacon verify`)\n\n");
 
     md.push_str("## Commands\n\n");
     md.push_str("```bash\n");

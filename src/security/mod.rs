@@ -1,4 +1,6 @@
+pub mod cwe;
 pub mod findings;
+pub mod patterns;
 pub mod policy;
 pub mod sites;
 pub mod verifier;

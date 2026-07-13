@@ -10,7 +10,7 @@ use crate::graph::persistence;
 use crate::imports::{resolve_imports, RawImport};
 use crate::indexer::package::{group_into_packages, hot_symbols};
 use crate::indexer::writer::{write_index, write_package};
-use crate::types::{FileEntry, PackageSummary, RepoIndex};
+use crate::types::{FileEntry, PackageDetail, PackageSummary, RepoIndex};
 use anyhow::Result;
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
@@ -141,10 +141,29 @@ impl Indexer {
         summaries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         summaries.retain(|s| s.score >= 0.05);
 
-        let hot = hot_symbols(&packages, 10);
         let repo_name = self.repo_root.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "repo".into());
+
+        Self::write_index_artifacts(&codeindex, &packages, summaries, repo_name)?;
+        Ok(())
+    }
+
+    fn write_index_artifacts(
+        codeindex: &Path,
+        packages: &[PackageDetail],
+        summaries: Vec<PackageSummary>,
+        repo_name: String,
+    ) -> Result<()> {
+        let usage = crate::compact::read_usage(codeindex).unwrap_or_default();
+        let mut hot = hot_symbols(packages, 20);
+        hot = crate::compact::boost_hot_symbols(hot, &usage, 10);
+
+        let prev_rev = crate::compact::read_dict(codeindex)?
+            .map(|d| d.rev)
+            .unwrap_or(0);
+        let dict = crate::compact::build_dict_from_packages(packages, prev_rev);
+        crate::compact::write_dict(&dict, codeindex)?;
 
         let index = RepoIndex {
             repo: repo_name,
@@ -152,9 +171,10 @@ impl Indexer {
             packages: summaries,
             hot_symbols: hot,
         };
-
-        write_index(&index, &codeindex)?;
-        for pkg in &packages { write_package(pkg, &codeindex)?; }
+        write_index(&index, codeindex)?;
+        for pkg in packages {
+            write_package(pkg, codeindex)?;
+        }
         Ok(())
     }
 
@@ -313,19 +333,10 @@ impl Indexer {
         }).collect();
         summaries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         summaries.retain(|s| s.score >= 0.05);
-        let hot = hot_symbols(&packages, 10);
         let repo_name = self.repo_root.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "repo".into());
-        let index = RepoIndex {
-            repo: repo_name,
-            generated_at: Utc::now().to_rfc3339(),
-            packages: summaries,
-            hot_symbols: hot,
-        };
-        write_index(&index, &codeindex)?;
-        for pkg in &packages { write_package(pkg, &codeindex)?; }
-        Ok(())
+        Self::write_index_artifacts(&codeindex, &packages, summaries, repo_name)
     }
 
     pub fn save_graph(&self) -> Result<()> {

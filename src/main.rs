@@ -1,3 +1,4 @@
+mod compact;
 mod config;
 mod config_file;
 mod daemon;
@@ -44,7 +45,7 @@ enum Commands {
         #[arg(long)]
         security: bool,
     },
-    /// Verify a code fragment against the CWE-190 security policy
+    /// Verify a code fragment against the security policy (CWE checks)
     Verify {
         #[arg(long)]
         content: String,
@@ -89,6 +90,8 @@ enum Commands {
         question: String,
         #[arg(long)]
         root: Option<PathBuf>,
+        #[arg(long)]
+        compact: Option<bool>,
     },
     /// Shortest dependency path between two files/symbols/packages
     Path {
@@ -221,10 +224,25 @@ async fn main() -> Result<()> {
                 println!("{md}");
             }
         }
-        Commands::Query { question, root } => {
+        Commands::Query { question, root, compact } => {
             let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
             let ctx = query::RepoQueryCtx::load(&repo)?;
-            print!("{}", ctx.format_query(&question, 10));
+            let use_compact = compact.unwrap_or(cfg.compact.enabled);
+            if use_compact {
+                let mut session = crate::compact::session_for_repo(&config::codeindex_dir(&repo));
+                let matches = ctx.query(&question, 10);
+                let compact_matches = crate::compact::encode_query_matches(&matches, &mut session);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "question": question,
+                        "matches": compact_matches,
+                    }))?
+                );
+            } else {
+                print!("{}", ctx.format_query(&question, 10));
+            }
         }
         Commands::Path { from, to, root } => {
             let repo = resolve_single_root(root)?;
