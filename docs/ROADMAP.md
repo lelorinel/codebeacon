@@ -8,6 +8,10 @@
 - Optional tree-sitter extraction for Rust, Go, Python, TypeScript/JS, C# (`tree-sitter` feature)
 - Multi-platform install (Cursor, Claude, Codex, OpenCode, Hermes, agents, VS Code)
 
+## v0.5 — Planned
+
+- [x] Loop Context Coordinator — `loop_begin` / `loop_tick` / `loop_record` / `loop_end`, CLI `loop watch`, [LOOP.md](LOOP.md)
+
 ## v0.3 — Planned
 
 - [ ] `codebeacon serve --http` — team MCP endpoint

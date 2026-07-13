@@ -2,6 +2,7 @@ pub mod protocol;
 pub mod tools;
 
 pub(crate) mod intelligence_handlers;
+pub(crate) mod loop_handlers;
 
 use crate::compact::DictSession;
 use crate::config;
@@ -29,6 +30,7 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
             ctx.map_or(false, |c| c.fs_tools),
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.security.enabled)),
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.intelligence.enabled)),
+            ctx.map_or(false, |c| c.repos.iter().any(|r| r.loop_config.enabled)),
         )),
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
@@ -187,6 +189,7 @@ pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_secu
                 security: cfg.security.to_policy(cli_security),
                 compact: cfg.compact.clone(),
                 intelligence: cfg.intelligence.clone(),
+                loop_config: cfg.loop_config.clone(),
                 dict_session: Mutex::new(DictSession::default()),
             }
         })

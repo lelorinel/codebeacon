@@ -58,7 +58,7 @@ fn compact_property() -> Value {
     })
 }
 
-pub fn tool_list(fs_tools: bool, security: bool, intelligence: bool) -> Value {
+pub fn tool_list(fs_tools: bool, security: bool, intelligence: bool, loop_enabled: bool) -> Value {
     let mut tools = vec![
         serde_json::json!({
             "name": "get_context",
@@ -408,6 +408,67 @@ pub fn tool_list(fs_tools: bool, security: bool, intelligence: bool) -> Value {
                         "repo": { "type": "string" }
                     },
                     "required": []
+                }
+            }),
+        ]);
+    }
+
+    if loop_enabled {
+        tools.extend([
+            serde_json::json!({
+                "name": "loop_begin",
+                "description": "Start a loop context session for iterative agent work.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "goal": { "type": "string", "description": "Task goal / prompt context" },
+                        "file": { "type": "string", "description": "Primary active file" },
+                        "files": { "type": "array", "items": { "type": "string" } },
+                        "tick": { "type": "boolean", "description": "Run first loop_tick immediately (default true)" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["goal"]
+                }
+            }),
+            serde_json::json!({
+                "name": "loop_tick",
+                "description": "Next loop iteration: index status, focus context, reindex policy, signals.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "file": { "type": "string" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["session_id"]
+                }
+            }),
+            serde_json::json!({
+                "name": "loop_record",
+                "description": "Record files touched after an edit; optional change_impact for symbol.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "files": { "type": "array", "items": { "type": "string" } },
+                        "symbol": { "type": "string" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["session_id", "files"]
+                }
+            }),
+            serde_json::json!({
+                "name": "loop_end",
+                "description": "Close loop session and return summary.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["session_id"]
                 }
             }),
         ]);

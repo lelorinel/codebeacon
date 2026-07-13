@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Loop Context Coordinator (v0.5.0)
+
+- **`[loop]` config** — `reindex` policy (`never` | `if_stale` | `every_n` | `always`), `stale_warn_threshold`, `max_iterations`, `prefetch_on_tick`, session persistence under `.codeindex/loop/`.
+- **MCP tools** — `loop_begin`, `loop_tick`, `loop_record`, `loop_end` (hidden when `[loop] enabled = false`).
+- **Reindex on tick** — `catchup_index` when policy matches; signals `should_pause` / `should_stop`.
+- **Compact encode** — `loop_tick` bundle short keys (`sid`, `it`, `sig`, `fc`, etc.).
+- **CLI** — `codebeacon loop begin|tick|record|end|watch|run`; `watch` emits `AGENT_LOOP_TICK_codebeacon` for Cursor `/loop`.
+- **Docs** — [LOOP.md](docs/LOOP.md), [worked/loop-sdk/](worked/loop-sdk/).
+
 ## [0.4.0] - 2026-07-13
 
 ### Added

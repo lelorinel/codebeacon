@@ -34,7 +34,17 @@ enabled = true
 focus_default_radius = 2
 change_impact_high_ref_threshold = 10
 conventions_enabled = true
-git_context_enabled = true   # why_file, index_status git section
+git_context_enabled = true
+
+[loop]
+enabled = true
+reindex = "if_stale"
+reindex_every_n = 3
+stale_warn_threshold = 5
+max_iterations = 50
+persist_sessions = true
+prefetch_on_tick = ["index_status", "focus_context"]
+default_focus_radius = 2
 
 [security]
 enabled = false            # or: codebeacon serve --security
@@ -85,6 +95,19 @@ Per-call override: pass `"compact": false` on any MCP tool. See [BENCHMARKS.md](
 | `change_impact_high_ref_threshold` | `10` | Reference count above which `change_impact` reports `risk: high` |
 | `conventions_enabled` | `true` | Write `.codeindex/conventions.json` on index rebuild |
 | `git_context_enabled` | `true` | Git subprocess helpers for `why_file` and `index_status` |
+
+## `[loop]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | When false, loop MCP tools are hidden from `tools/list` |
+| `reindex` | `if_stale` | `never`, `if_stale`, `every_n`, or `always` — when `loop_tick` triggers `catchup_index` |
+| `reindex_every_n` | `3` | Re-index every N iterations when `reindex = every_n` |
+| `stale_warn_threshold` | `5` | Stale file count that sets `should_pause` in tick signals |
+| `max_iterations` | `50` | Sets `should_stop` when iteration reaches this count |
+| `persist_sessions` | `true` | Write session state under `.codeindex/loop/<session_id>/` |
+| `prefetch_on_tick` | `index_status`, `focus_context` | Bundle sections to include; add `task_context` if needed |
+| `default_focus_radius` | `2` | BFS radius for focus in loop ticks (0 → use `[intelligence]` value) |
 
 ## `[security]`
 

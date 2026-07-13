@@ -105,6 +105,13 @@ pub struct CompactChangeImpact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactTaskDrill {
+    pub n: String,
+    pub f: usize,
+    pub sy: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompactTaskContext {
     pub q: String,
     pub m: Vec<CompactQueryMatch>,
@@ -113,8 +120,25 @@ pub struct CompactTaskContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CompactTaskDrill {
-    pub n: String,
-    pub f: usize,
-    pub sy: Vec<String>,
+pub struct CompactLoopSignals {
+    pub sc: usize,
+    pub rr: bool,
+    pub ri: bool,
+    pub sp: bool,
+    pub ss: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub h: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactLoopTick {
+    pub sid: String,
+    pub it: u32,
+    pub g: String,
+    pub st: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fc: Option<CompactFocusResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tk: Option<CompactTaskContext>,
+    pub sig: CompactLoopSignals,
 }

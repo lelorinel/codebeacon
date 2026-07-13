@@ -11,6 +11,7 @@ pub mod imports;
 pub mod indexer;
 pub mod install;
 pub mod intelligence;
+pub mod loop_coord;
 pub mod lsp;
 pub mod mcp;
 pub mod query;

@@ -1,12 +1,14 @@
 use crate::compact::dict::DictSession;
 use crate::compact::schema::{
     CompactChangeImpact, CompactFileEntry, CompactFocusNeighbor, CompactFocusResponse,
-    CompactPackageDetail, CompactPackageSummary, CompactQueryMatch, CompactRepoIndex,
-    CompactSymbolEntry, CompactSymbolRef, CompactTaskContext, CompactTaskDrill,
+    CompactLoopSignals, CompactLoopTick, CompactPackageDetail, CompactPackageSummary,
+    CompactQueryMatch, CompactRepoIndex, CompactSymbolEntry, CompactSymbolRef,
+    CompactTaskContext, CompactTaskDrill,
 };
 use crate::intelligence::{
     ChangeImpactResponse, FocusResponse, TaskContextResponse,
 };
+use crate::loop_coord::tick::LoopTickBundle;
 use crate::query::{MatchKind, QueryMatch};
 use crate::types::{PackageDetail, RepoIndex, SymbolKind};
 use serde_json::{json, Value};
@@ -223,6 +225,37 @@ pub fn encode_task_context(
         q: task.question.clone(),
         m,
         drill,
+    }
+}
+
+pub fn encode_loop_tick(
+    bundle: &LoopTickBundle,
+    session: &mut DictSession,
+) -> CompactLoopTick {
+    let fc = bundle
+        .focus
+        .as_ref()
+        .map(|f| encode_focus_response(f, session));
+    let tk = bundle
+        .task
+        .as_ref()
+        .map(|t| encode_task_context(t, session));
+    let st = serde_json::to_value(&bundle.status).unwrap_or(serde_json::json!({}));
+    CompactLoopTick {
+        sid: bundle.session_id.clone(),
+        it: bundle.iteration,
+        g: bundle.goal.clone(),
+        st,
+        fc,
+        tk,
+        sig: CompactLoopSignals {
+            sc: bundle.signals.stale_count,
+            rr: bundle.signals.reindex_recommended,
+            ri: bundle.signals.reindexed,
+            sp: bundle.signals.should_pause,
+            ss: bundle.signals.should_stop,
+            h: bundle.signals.hints.clone(),
+        },
     }
 }
 

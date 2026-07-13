@@ -4,7 +4,7 @@ use crate::compact::{
     read_dict, record_usage, resolve_file_arg_with_root, session_for_repo, DictSession,
 };
 use crate::config::codeindex_dir;
-use crate::config_file::{CompactConfig, IntelligenceConfig};
+use crate::config_file::{CompactConfig, IntelligenceConfig, LoopConfig};
 use crate::graph::{persistence as graph_persistence, DependencyGraph};
 use crate::indexer::writer::{read_index, read_package};
 use crate::lsp::pool::LspPool;
@@ -15,6 +15,7 @@ use crate::security::{decide, verify_fragment, GateAction, SecurityPolicy};
 use anyhow::{Context, Result};
 
 use crate::mcp::intelligence_handlers;
+use crate::mcp::loop_handlers;
 use serde_json::Value;
 use std::path::{Component, PathBuf};
 use std::sync::Mutex;
@@ -29,6 +30,7 @@ pub struct RepoCtx {
     pub security: SecurityPolicy,
     pub compact: CompactConfig,
     pub intelligence: IntelligenceConfig,
+    pub loop_config: LoopConfig,
     pub dict_session: Mutex<DictSession>,
 }
 
@@ -127,6 +129,10 @@ pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
         "api_surface"      => intelligence_handlers::handle_api_surface(ctx, args),
         "why_file"         => intelligence_handlers::handle_why_file(ctx, args),
         "fragile_files"    => intelligence_handlers::handle_fragile_files(ctx, args),
+        "loop_begin"       => loop_handlers::handle_loop_begin(ctx, args),
+        "loop_tick"        => loop_handlers::handle_loop_tick(ctx, args),
+        "loop_record"      => loop_handlers::handle_loop_record(ctx, args),
+        "loop_end"         => loop_handlers::handle_loop_end(ctx, args),
         "read_file" | "write_file" | "edit_file" | "list_directory" => {
             if !ctx.fs_tools {
                 anyhow::bail!(
@@ -1106,6 +1112,7 @@ mod tests {
             security: SecurityPolicy::default(),
             compact: CompactConfig::default(),
             intelligence: IntelligenceConfig::default(),
+            loop_config: LoopConfig::default(),
             dict_session: Mutex::new(DictSession::default()),
         }
     }

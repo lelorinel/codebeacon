@@ -66,3 +66,17 @@ Recommended workflow before editing: `index_status` → `focus_context` → `cha
 | `fragile_files` | High-churn files with many dependents |
 
 CLI: `codebeacon focus`, `status`, `impact`, `api`, `why`. Disable via `[intelligence] enabled = false` in `.codeindex.toml`.
+
+## Loop context (v0.5+)
+
+Codebeacon does not run the agent loop — it refreshes context each iteration.
+
+| Tool | When to use |
+|------|-------------|
+| `loop_begin` | Start iterative task; returns `session_id` (+ optional first tick) |
+| `loop_tick` | Next iteration: status, focus, reindex, signals |
+| `loop_record` | After edits: record touched files (+ optional symbol impact) |
+| `loop_end` | Close session; summary |
+
+Workflow: `loop_begin` → work → `loop_record` → `loop_tick` → repeat → `loop_end`.  
+CLI: `codebeacon loop begin|tick|record|end|watch`. See [LOOP.md](docs/LOOP.md).

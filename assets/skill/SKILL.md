@@ -25,6 +25,11 @@ If no index exists, call **`init_workspace`** first.
 
 Call **`get_dependents`** on a file to see what breaks if you change it. CLI: `codebeacon dependents <file>`.
 
+## Loop context (iterative agents)
+
+For multi-step edit loops: **`loop_begin`** → edit → **`loop_record`** → **`loop_tick`** → repeat → **`loop_end`**.  
+CLI: `codebeacon loop begin "goal" --file src/foo.rs`. See [references/loop.md](references/loop.md) or [LOOP.md](../../../docs/LOOP.md).
+
 ## Graph queries (Graphify parity)
 
 | Tool | CLI equivalent | Purpose |

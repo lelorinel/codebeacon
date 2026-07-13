@@ -1,3 +1,4 @@
+mod loop_coord;
 mod intelligence;
 mod compact;
 mod config;
@@ -152,6 +153,11 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Loop context coordinator for iterative agent work
+    Loop {
+        #[command(subcommand)]
+        command: LoopCommands,
+    },
     /// Export dependency graph
     Export {
         #[command(subcommand)]
@@ -161,6 +167,70 @@ enum Commands {
     Hook {
         #[command(subcommand)]
         command: HookCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum LoopCommands {
+    /// Start a loop session (optionally runs first tick)
+    Begin {
+        goal: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        no_tick: bool,
+        #[arg(long)]
+        compact: Option<bool>,
+    },
+    /// Next loop iteration context bundle
+    Tick {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        compact: Option<bool>,
+    },
+    /// Record files touched after an edit
+    Record {
+        #[arg(long)]
+        session: String,
+        #[arg(long, required = true)]
+        files: Vec<String>,
+        #[arg(long)]
+        symbol: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Close loop session
+    End {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Emit AGENT_LOOP_TICK_codebeacon sentinel on interval (Cursor /loop integration)
+    Watch {
+        #[arg(long)]
+        session: String,
+        #[arg(long, default_value = "5m")]
+        interval: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// begin + first tick + watch (one-shot setup)
+    Run {
+        goal: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        interval: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
     },
 }
 
@@ -381,6 +451,7 @@ async fn main() -> Result<()> {
             let out = intelligence::why_file(&qctx, &rel, recent_commits, blame_first_line);
             println!("{}", serde_json::to_string_pretty(&out)?);
         }
+        Commands::Loop { command } => run_loop_command(command)?,
         Commands::Export { command } => match command {
             ExportCommands::Mermaid {
                 root,
@@ -439,6 +510,199 @@ fn resolve_single_root(override_path: Option<PathBuf>) -> Result<PathBuf> {
     Ok(repos[0].clone())
 }
 
+fn run_loop_command(command: LoopCommands) -> Result<()> {
+    match command {
+        LoopCommands::Begin {
+            goal,
+            file,
+            root,
+            no_tick,
+            compact,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let codeindex = config::codeindex_dir(&repo);
+            let active = loop_coord::resolve_active_files(&repo, file.as_deref(), None);
+            let (_session, resp) = loop_coord::loop_begin_with_tick(
+                &repo,
+                &codeindex,
+                &goal,
+                active,
+                &cfg.loop_config,
+                &cfg.intelligence,
+                &qctx,
+                !no_tick,
+            )?;
+            let use_compact = compact.unwrap_or(cfg.compact.enabled);
+            if use_compact {
+                if let Some(ref tick) = resp.tick {
+                    let mut session = crate::compact::session_for_repo(&codeindex);
+                    let c = crate::compact::encode_loop_tick(tick, &mut session);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "session_id": resp.session_id,
+                            "goal": resp.goal,
+                            "tick": c,
+                        }))?
+                    );
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            }
+        }
+        LoopCommands::Tick {
+            session,
+            file,
+            root,
+            compact,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let codeindex = config::codeindex_dir(&repo);
+            let mut loop_session = loop_coord::read_session(&codeindex, &session)?;
+            let file_rel = file.as_deref();
+            let out = loop_coord::loop_tick(
+                &repo,
+                &codeindex,
+                &mut loop_session,
+                &cfg.loop_config,
+                &cfg.intelligence,
+                &qctx,
+                file_rel,
+            )?;
+            loop_coord::write_session(&codeindex, &loop_session)?;
+            let use_compact = compact.unwrap_or(cfg.compact.enabled);
+            if use_compact {
+                let mut dict = crate::compact::session_for_repo(&codeindex);
+                let c = crate::compact::encode_loop_tick(&out, &mut dict);
+                println!("{}", serde_json::to_string_pretty(&c)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            }
+        }
+        LoopCommands::Record {
+            session,
+            files,
+            symbol,
+            root,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let codeindex = config::codeindex_dir(&repo);
+            let mut loop_session = loop_coord::read_session(&codeindex, &session)?;
+            let out = loop_coord::loop_record(
+                &repo,
+                &codeindex,
+                &mut loop_session,
+                &cfg.loop_config,
+                &cfg.intelligence,
+                &qctx,
+                &files,
+                symbol.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        LoopCommands::End { session, root } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let codeindex = config::codeindex_dir(&repo);
+            let mut loop_session = loop_coord::read_session(&codeindex, &session)?;
+            let out = loop_coord::loop_end(
+                &repo,
+                &codeindex,
+                &mut loop_session,
+                &cfg.loop_config,
+                &cfg.intelligence,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        LoopCommands::Watch {
+            session,
+            interval,
+            root,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let secs = parse_interval_secs(&interval)?;
+            let exe = std::env::current_exe()?;
+            let root_s = repo.display();
+            let prompt = serde_json::json!({
+                "session_id": session,
+                "prompt": format!("Call codebeacon loop tick --session {session} and continue the task."),
+            });
+            let prompt_escaped = prompt.to_string().replace('\'', "'\\''");
+            println!(
+                "Watching session {session} every {interval} ({secs}s). Press Ctrl+C to stop."
+            );
+            let script = format!(
+                "while true; do sleep {secs}; echo 'AGENT_LOOP_TICK_codebeacon {prompt_escaped}'; done"
+            );
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .env("CODEBEACON_LOOP_ROOT", root_s.to_string())
+                .status()
+                .context("failed to run watch loop")?;
+            if !status.success() {
+                anyhow::bail!("watch loop exited with {}", status);
+            }
+        }
+        LoopCommands::Run {
+            goal,
+            file,
+            interval,
+            root,
+        } => {
+            let repo = resolve_single_root(root.clone())?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let codeindex = config::codeindex_dir(&repo);
+            let active = loop_coord::resolve_active_files(&repo, file.as_deref(), None);
+            let (_session, resp) = loop_coord::loop_begin_with_tick(
+                &repo,
+                &codeindex,
+                &goal,
+                active,
+                &cfg.loop_config,
+                &cfg.intelligence,
+                &qctx,
+                true,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+            if let Some(iv) = interval {
+                run_loop_command(LoopCommands::Watch {
+                    session: resp.session_id,
+                    interval: iv,
+                    root,
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_interval_secs(s: &str) -> Result<u64> {
+    let s = s.trim().to_lowercase();
+    if let Some(num) = s.strip_suffix('s') {
+        return Ok(num.parse().context("invalid seconds")?);
+    }
+    if let Some(num) = s.strip_suffix('m') {
+        return Ok(num.parse::<u64>().context("invalid minutes")? * 60);
+    }
+    if let Some(num) = s.strip_suffix('h') {
+        return Ok(num.parse::<u64>().context("invalid hours")? * 3600);
+    }
+    if let Some(num) = s.strip_suffix('d') {
+        return Ok(num.parse::<u64>().context("invalid days")? * 86400);
+    }
+    s.parse::<u64>().context("interval must be like 30s, 5m, 2h")
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -447,7 +711,7 @@ mod tests {
         let cmd = super::Cli::command();
         for name in [
             "init", "serve", "verify", "install", "report", "query", "path",
-            "explain", "dependents", "focus", "status", "impact", "api", "why",
+            "explain", "dependents", "focus", "status", "impact", "api", "why", "loop",
             "export", "hook",
         ] {
             assert!(

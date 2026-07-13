@@ -54,6 +54,10 @@ Rust, Go, Python, TypeScript/JavaScript, C# — regex extraction needs no LSP bi
 | `focus_context` | Narrow subgraph around the file you are editing |
 | `change_impact` | Blast radius before changing a symbol |
 
+### Loop workflow
+
+`loop_begin` → edit → `loop_record` → `loop_tick` → repeat → `loop_end`. Details: [LOOP.md](docs/LOOP.md).
+
 Full tool list: [mcp-tools.md](assets/skill/references/mcp-tools.md)
 
 ### CLI
@@ -63,6 +67,7 @@ codebeacon init                              # build .codeindex/
 codebeacon serve                             # MCP server (add --fs-tools or --security as needed)
 codebeacon query "auth"                      # search
 codebeacon focus src/auth.rs                 # edit-time subgraph
+codebeacon loop begin "fix login" --file src/auth.rs
 codebeacon status                            # index freshness
 codebeacon impact login                      # symbol blast radius
 codebeacon path src/auth.rs src/db.rs        # shortest dependency chain

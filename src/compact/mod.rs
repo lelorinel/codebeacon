@@ -12,8 +12,8 @@ pub use dict::{
     SymbolRef,
 };
 pub use encode::{
-    encode_change_impact, encode_focus_response, encode_index_response, encode_package_response,
-    encode_query_matches, encode_task_context, path_ref_for,
+    encode_change_impact, encode_focus_response, encode_index_response, encode_loop_tick,
+    encode_package_response, encode_query_matches, encode_task_context, path_ref_for,
 };
 pub use schema::{
     CompactChangeImpact, CompactFileEntry, CompactFocusResponse, CompactPackageDetail,

@@ -39,6 +39,9 @@ pub struct CodeIndexConfig {
 
     #[serde(default)]
     pub intelligence: IntelligenceConfig,
+
+    #[serde(default, rename = "loop")]
+    pub loop_config: LoopConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -57,6 +60,7 @@ impl Default for CodeIndexConfig {
             extractor: ExtractorConfig::default(),
             compact: CompactConfig::default(),
             intelligence: IntelligenceConfig::default(),
+            loop_config: LoopConfig::default(),
         }
     }
 }
@@ -233,6 +237,102 @@ impl Default for IntelligenceConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReindexPolicy {
+    Never,
+    IfStale,
+    EveryN,
+    Always,
+}
+
+impl Default for ReindexPolicy {
+    fn default() -> Self {
+        ReindexPolicy::IfStale
+    }
+}
+
+impl ReindexPolicy {
+    pub fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "never" => ReindexPolicy::Never,
+            "if_stale" | "if-stale" => ReindexPolicy::IfStale,
+            "every_n" | "every-n" => ReindexPolicy::EveryN,
+            "always" => ReindexPolicy::Always,
+            _ => ReindexPolicy::IfStale,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoopConfig {
+    #[serde(default = "default_loop_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub reindex: ReindexPolicy,
+    #[serde(default = "default_reindex_every_n")]
+    pub reindex_every_n: u32,
+    #[serde(default = "default_stale_warn_threshold")]
+    pub stale_warn_threshold: u32,
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u32,
+    #[serde(default = "default_true")]
+    pub persist_sessions: bool,
+    #[serde(default = "default_prefetch_on_tick")]
+    pub prefetch_on_tick: Vec<String>,
+    #[serde(default = "default_focus_radius")]
+    pub default_focus_radius: u32,
+}
+
+fn default_loop_enabled() -> bool {
+    true
+}
+
+fn default_reindex_every_n() -> u32 {
+    3
+}
+
+fn default_stale_warn_threshold() -> u32 {
+    5
+}
+
+fn default_max_iterations() -> u32 {
+    50
+}
+
+fn default_prefetch_on_tick() -> Vec<String> {
+    vec!["index_status".into(), "focus_context".into()]
+}
+
+impl Default for LoopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_loop_enabled(),
+            reindex: ReindexPolicy::IfStale,
+            reindex_every_n: default_reindex_every_n(),
+            stale_warn_threshold: default_stale_warn_threshold(),
+            max_iterations: default_max_iterations(),
+            persist_sessions: default_true(),
+            prefetch_on_tick: default_prefetch_on_tick(),
+            default_focus_radius: default_focus_radius(),
+        }
+    }
+}
+
+impl LoopConfig {
+    pub fn wants_prefetch(&self, name: &str) -> bool {
+        self.prefetch_on_tick.iter().any(|p| p == name)
+    }
+
+    pub fn focus_radius(&self, intelligence: &IntelligenceConfig) -> u32 {
+        if self.default_focus_radius > 0 {
+            self.default_focus_radius
+        } else {
+            intelligence.focus_default_radius
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct LspConfig {
     /// Override LSP binary per language, e.g. {"csharp": "OmniSharp"}
@@ -372,5 +472,23 @@ max_tree_sitter_bytes = 256000
         let cfg = SecurityConfig::default();
         assert!(!cfg.to_policy(false).enabled);
         assert!(cfg.to_policy(true).enabled);
+    }
+
+    #[test]
+    fn load_parses_loop_section() {
+        let tmp = TempDir::new().unwrap();
+        let config_content = r#"
+[loop]
+enabled = true
+reindex = "if_stale"
+reindex_every_n = 5
+max_iterations = 20
+"#;
+        fs::write(tmp.path().join(".codeindex.toml"), config_content).unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(cfg.loop_config.enabled);
+        assert_eq!(cfg.loop_config.reindex, ReindexPolicy::IfStale);
+        assert_eq!(cfg.loop_config.reindex_every_n, 5);
+        assert_eq!(cfg.loop_config.max_iterations, 20);
     }
 }
