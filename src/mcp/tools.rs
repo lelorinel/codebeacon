@@ -4,7 +4,7 @@ use crate::compact::{
     read_dict, record_usage, resolve_file_arg_with_root, session_for_repo, DictSession,
 };
 use crate::config::codeindex_dir;
-use crate::config_file::CompactConfig;
+use crate::config_file::{CompactConfig, IntelligenceConfig};
 use crate::graph::{persistence as graph_persistence, DependencyGraph};
 use crate::indexer::writer::{read_index, read_package};
 use crate::lsp::pool::LspPool;
@@ -13,6 +13,8 @@ use crate::query::RepoQueryCtx;
 use crate::report;
 use crate::security::{decide, verify_fragment, GateAction, SecurityPolicy};
 use anyhow::{Context, Result};
+
+use crate::mcp::intelligence_handlers;
 use serde_json::Value;
 use std::path::{Component, PathBuf};
 use std::sync::Mutex;
@@ -26,11 +28,12 @@ pub struct RepoCtx {
     pub lsp_pool: Mutex<LspPool>,
     pub security: SecurityPolicy,
     pub compact: CompactConfig,
+    pub intelligence: IntelligenceConfig,
     pub dict_session: Mutex<DictSession>,
 }
 
 impl RepoCtx {
-    fn codeindex(&self) -> PathBuf {
+    pub(crate) fn codeindex(&self) -> PathBuf {
         codeindex_dir(&self.root)
     }
 
@@ -39,24 +42,24 @@ impl RepoCtx {
         graph_persistence::load(&path).unwrap_or_default()
     }
 
-    fn dict_session_mut(&self) -> std::sync::MutexGuard<'_, DictSession> {
+    pub(crate) fn dict_session_mut(&self) -> std::sync::MutexGuard<'_, DictSession> {
         self.dict_session.lock().unwrap()
     }
 
-    fn ensure_dict_session(&self) {
+    pub(crate) fn ensure_dict_session(&self) {
         let mut session = self.dict_session_mut();
         if session.paths.is_empty() {
             *session = session_for_repo(&self.codeindex());
         }
     }
 
-    fn resolve_file(&self, file: &str) -> PathBuf {
+    pub(crate) fn resolve_file(&self, file: &str) -> PathBuf {
         self.ensure_dict_session();
         let session = self.dict_session.lock().unwrap();
         resolve_file_arg_with_root(&session, &self.root, file)
     }
 
-    fn maybe_record_usage(&self, tool: &str, key: &str, compact: bool) {
+    pub(crate) fn maybe_record_usage(&self, tool: &str, key: &str, compact: bool) {
         if compact {
             let _ = record_usage(&self.codeindex(), tool, key);
         }
@@ -87,7 +90,7 @@ pub struct ToolContext {
 impl ToolContext {
     /// Returns the repos that match an optional `repo` name filter.
     /// With no filter all repos are returned.
-    fn repos_for<'a>(&'a self, filter: Option<&str>) -> Vec<&'a RepoCtx> {
+    pub(crate) fn repos_for<'a>(&'a self, filter: Option<&str>) -> Vec<&'a RepoCtx> {
         match filter {
             Some(name) => self.repos.iter().filter(|r| r.name == name).collect(),
             None => self.repos.iter().collect(),
@@ -95,7 +98,7 @@ impl ToolContext {
     }
 
     /// True when serving more than one repo (multi-repo workspace mode).
-    fn multi(&self) -> bool {
+    pub(crate) fn multi(&self) -> bool {
         self.repos.len() > 1
     }
 }
@@ -115,6 +118,15 @@ pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
         "get_report"       => handle_get_report(ctx, args),
         "get_index_summary"=> handle_get_index_summary(ctx, args),
         "get_hotspots"     => handle_get_hotspots_resource(ctx, args),
+        "focus_context"    => intelligence_handlers::handle_focus_context(ctx, args),
+        "task_context"     => intelligence_handlers::handle_task_context(ctx, args),
+        "change_impact"    => intelligence_handlers::handle_change_impact(ctx, args),
+        "index_status"     => intelligence_handlers::handle_index_status(ctx, args),
+        "package_conventions" => intelligence_handlers::handle_package_conventions(ctx, args),
+        "similar_symbols"  => intelligence_handlers::handle_similar_symbols(ctx, args),
+        "api_surface"      => intelligence_handlers::handle_api_surface(ctx, args),
+        "why_file"         => intelligence_handlers::handle_why_file(ctx, args),
+        "fragile_files"    => intelligence_handlers::handle_fragile_files(ctx, args),
         "read_file" | "write_file" | "edit_file" | "list_directory" => {
             if !ctx.fs_tools {
                 anyhow::bail!(
@@ -1093,6 +1105,7 @@ mod tests {
             lsp_pool: Mutex::new(LspPool::new("file:///tmp")),
             security: SecurityPolicy::default(),
             compact: CompactConfig::default(),
+            intelligence: IntelligenceConfig::default(),
             dict_session: Mutex::new(DictSession::default()),
         }
     }

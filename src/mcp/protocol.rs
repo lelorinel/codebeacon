@@ -58,7 +58,7 @@ fn compact_property() -> Value {
     })
 }
 
-pub fn tool_list(fs_tools: bool, security: bool) -> Value {
+pub fn tool_list(fs_tools: bool, security: bool, intelligence: bool) -> Value {
     let mut tools = vec![
         serde_json::json!({
             "name": "get_context",
@@ -287,6 +287,130 @@ pub fn tool_list(fs_tools: bool, security: bool) -> Value {
                 "required": ["content"]
             }
         }));
+    }
+
+    if intelligence {
+        tools.extend([
+            serde_json::json!({
+                "name": "focus_context",
+                "description": "Subgraph around a file for edit-time context (anchor package, neighbors, symbols).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "File path or dict ref (p1)" },
+                        "radius": { "type": "integer", "description": "BFS hop cap (default from [intelligence] focus_default_radius)" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["file"]
+                }
+            }),
+            serde_json::json!({
+                "name": "task_context",
+                "description": "Keyword search plus package drill summary for a task (e.g. 'login bug').",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string" },
+                        "file": { "type": "string", "description": "Optional file for proximity boost" },
+                        "limit": { "type": "integer", "description": "Max matches (default 10)" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["question"]
+                }
+            }),
+            serde_json::json!({
+                "name": "change_impact",
+                "description": "Blast radius before changing a symbol (definitions, references, dependent files, risk tier).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string" },
+                        "file": { "type": "string", "description": "Scope to package containing this file" },
+                        "exact": { "type": "boolean", "description": "Exact symbol name match (default true)" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["symbol"]
+                }
+            }),
+            serde_json::json!({
+                "name": "index_status",
+                "description": "Index freshness vs working tree (stale files, git dirty count).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "package_conventions",
+                "description": "Convention fingerprint for a package (error style, logging, async, test patterns).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "package": { "type": "string" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["package"]
+                }
+            }),
+            serde_json::json!({
+                "name": "similar_symbols",
+                "description": "Lightweight symbol similarity by kind and signature token overlap.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string" },
+                        "file": { "type": "string" },
+                        "limit": { "type": "integer", "description": "Max results (default 5)" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["symbol"]
+                }
+            }),
+            serde_json::json!({
+                "name": "api_surface",
+                "description": "Public exports for a package (language-specific heuristics).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "package": { "type": "string" },
+                        "repo": { "type": "string" },
+                        "compact": compact_property()
+                    },
+                    "required": ["package"]
+                }
+            }),
+            serde_json::json!({
+                "name": "why_file",
+                "description": "Git history and dependency context for a file.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["file"]
+                }
+            }),
+            serde_json::json!({
+                "name": "fragile_files",
+                "description": "High-churn files with many dependents (hotspots × git churn).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Max results (default 10)" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+        ]);
     }
 
     serde_json::json!({ "tools": tools })

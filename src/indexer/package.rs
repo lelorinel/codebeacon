@@ -15,7 +15,7 @@ pub fn group_into_packages(files: Vec<FileEntry>) -> Vec<PackageDetail> {
     }).collect()
 }
 
-fn package_name_for(path: &std::path::Path) -> String {
+pub fn package_name_for(path: &std::path::Path) -> String {
     // Collect only directory components (no dots = not a file)
     let dirs: Vec<String> = path.components()
         .filter_map(|c| {

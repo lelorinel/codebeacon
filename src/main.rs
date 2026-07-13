@@ -1,3 +1,4 @@
+mod intelligence;
 mod compact;
 mod config;
 mod config_file;
@@ -18,7 +19,7 @@ mod security;
 mod types;
 mod verify_cmd;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -108,6 +109,45 @@ enum Commands {
     },
     /// List files that depend on the given file
     Dependents {
+        file: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Subgraph around a file for edit-time context
+    Focus {
+        file: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        radius: Option<u32>,
+        #[arg(long)]
+        compact: Option<bool>,
+    },
+    /// Index freshness vs working tree
+    Status {
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Blast radius before changing a symbol
+    Impact {
+        symbol: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        exact: Option<bool>,
+        #[arg(long)]
+        compact: Option<bool>,
+    },
+    /// Public exports for a package
+    Api {
+        package: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Git history and dependency context for a file
+    Why {
         file: String,
         #[arg(long)]
         root: Option<PathBuf>,
@@ -259,6 +299,88 @@ async fn main() -> Result<()> {
             let ctx = query::RepoQueryCtx::load(&repo)?;
             print!("{}", ctx.dependents_of(&file)?);
         }
+        Commands::Focus {
+            file,
+            root,
+            radius,
+            compact,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let abs = repo.join(&file);
+            let rel = intelligence::resolve_rel_path(&repo, &abs);
+            let r = radius.unwrap_or(cfg.intelligence.focus_default_radius);
+            let out = intelligence::focus_context(&qctx, &rel, r, &cfg.intelligence)?;
+            let use_compact = compact.unwrap_or(cfg.compact.enabled);
+            if use_compact {
+                let mut session = crate::compact::session_for_repo(&config::codeindex_dir(&repo));
+                let compact_out = crate::compact::encode_focus_response(&out, &mut session);
+                println!("{}", serde_json::to_string_pretty(&compact_out)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            }
+        }
+        Commands::Status { root } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let out = intelligence::index_status(&repo, &cfg.intelligence)?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::Impact {
+            symbol,
+            file,
+            root,
+            exact,
+            compact,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let file_rel = file.as_deref();
+            let out = intelligence::change_impact(
+                &qctx,
+                &symbol,
+                file_rel,
+                exact.unwrap_or(true),
+                &cfg.intelligence,
+            )?;
+            let use_compact = compact.unwrap_or(cfg.compact.enabled);
+            if use_compact {
+                let mut session = crate::compact::session_for_repo(&config::codeindex_dir(&repo));
+                let compact_out = crate::compact::encode_change_impact(&out, &mut session);
+                println!("{}", serde_json::to_string_pretty(&compact_out)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            }
+        }
+        Commands::Api { package, root } => {
+            let repo = resolve_single_root(root)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let pkg = qctx
+                .packages
+                .get(&package)
+                .with_context(|| format!("package '{package}' not found"))?;
+            let out = intelligence::api_surface(pkg);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::Why { file, root } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let abs = repo.join(&file);
+            let rel = intelligence::resolve_rel_path(&repo, &abs);
+            let (recent_commits, blame_first_line) = if cfg.intelligence.git_context_enabled {
+                (
+                    intelligence::git::git_log_file(&repo, &rel, 3),
+                    intelligence::git::git_blame_first_line(&repo, &rel),
+                )
+            } else {
+                (vec![], None)
+            };
+            let out = intelligence::why_file(&qctx, &rel, recent_commits, blame_first_line);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
         Commands::Export { command } => match command {
             ExportCommands::Mermaid {
                 root,
@@ -325,7 +447,8 @@ mod tests {
         let cmd = super::Cli::command();
         for name in [
             "init", "serve", "verify", "install", "report", "query", "path",
-            "explain", "dependents", "export", "hook",
+            "explain", "dependents", "focus", "status", "impact", "api", "why",
+            "export", "hook",
         ] {
             assert!(
                 cmd.get_subcommands().any(|s| s.get_name() == name),

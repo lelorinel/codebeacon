@@ -62,3 +62,59 @@ pub struct CompactQueryMatch {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub h: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactFocusNeighbor {
+    pub p: String,
+    pub sc: f32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sy: Vec<CompactSymbolEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub d: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub b: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactFocusResponse {
+    pub anc: String,
+    pub pkg: String,
+    pub nbr: Vec<CompactFocusNeighbor>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactSymbolRef {
+    pub p: String,
+    pub l: u32,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub g: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactChangeImpact {
+    pub sym: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub def: Option<CompactSymbolRef>,
+    pub rf: Vec<CompactSymbolRef>,
+    pub rc: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub df: Vec<String>,
+    pub risk: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactTaskContext {
+    pub q: String,
+    pub m: Vec<CompactQueryMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drill: Option<CompactTaskDrill>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactTaskDrill {
+    pub n: String,
+    pub f: usize,
+    pub sy: Vec<String>,
+}

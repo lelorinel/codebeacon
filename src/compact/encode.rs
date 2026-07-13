@@ -1,7 +1,11 @@
 use crate::compact::dict::DictSession;
 use crate::compact::schema::{
-    CompactFileEntry, CompactPackageDetail, CompactPackageSummary, CompactQueryMatch,
-    CompactRepoIndex, CompactSymbolEntry,
+    CompactChangeImpact, CompactFileEntry, CompactFocusNeighbor, CompactFocusResponse,
+    CompactPackageDetail, CompactPackageSummary, CompactQueryMatch, CompactRepoIndex,
+    CompactSymbolEntry, CompactSymbolRef, CompactTaskContext, CompactTaskDrill,
+};
+use crate::intelligence::{
+    ChangeImpactResponse, FocusResponse, TaskContextResponse,
 };
 use crate::query::{MatchKind, QueryMatch};
 use crate::types::{PackageDetail, RepoIndex, SymbolKind};
@@ -137,6 +141,88 @@ fn match_kind_char(kind: &MatchKind) -> char {
         MatchKind::File => 'F',
         MatchKind::Symbol => 'S',
         MatchKind::HotSymbol => 'H',
+    }
+}
+
+pub fn encode_focus_response(
+    focus: &FocusResponse,
+    session: &mut DictSession,
+) -> CompactFocusResponse {
+    let anc = session.path_id(&focus.anchor);
+    let nbr = focus
+        .neighbors
+        .iter()
+        .map(|n| {
+            let pid = session.path_id(&n.path);
+            CompactFocusNeighbor {
+                p: pid,
+                sc: n.score,
+                sy: n
+                    .symbols
+                    .iter()
+                    .map(|sym| CompactSymbolEntry {
+                        n: sym.name.clone(),
+                        g: sym.signature.clone(),
+                        k: Some(kind_short(&sym.kind).to_string()),
+                        l: sym.line,
+                        c: sym.character,
+                    })
+                    .collect(),
+                d: n.depends_on.clone(),
+                b: n.depended_by.clone(),
+            }
+        })
+        .collect();
+    CompactFocusResponse {
+        anc,
+        pkg: focus.package.clone(),
+        nbr,
+        hints: focus.hints.clone(),
+    }
+}
+
+pub fn encode_change_impact(
+    impact: &ChangeImpactResponse,
+    session: &mut DictSession,
+) -> CompactChangeImpact {
+    let def = impact.definition.as_ref().map(|d| CompactSymbolRef {
+        p: session.path_id(&d.file),
+        l: d.line,
+        g: d.signature.clone(),
+    });
+    let rf = impact
+        .references
+        .iter()
+        .map(|r| CompactSymbolRef {
+            p: session.path_id(&r.file),
+            l: r.line,
+            g: r.signature.clone(),
+        })
+        .collect();
+    CompactChangeImpact {
+        sym: impact.symbol.clone(),
+        def,
+        rf,
+        rc: impact.ref_count,
+        df: impact.dependent_files.clone(),
+        risk: impact.risk.clone(),
+    }
+}
+
+pub fn encode_task_context(
+    task: &TaskContextResponse,
+    session: &mut DictSession,
+) -> CompactTaskContext {
+    let m = encode_query_matches(&task.matches, session);
+    let drill = task.package_drill.as_ref().map(|d| CompactTaskDrill {
+        n: d.name.clone(),
+        f: d.file_count,
+        sy: d.top_symbols.clone(),
+    });
+    CompactTaskContext {
+        q: task.question.clone(),
+        m,
+        drill,
     }
 }
 

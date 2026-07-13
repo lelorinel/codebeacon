@@ -29,6 +29,13 @@ max_tree_sitter_bytes = 512000
 [compact]
 enabled = true             # false → legacy verbose MCP JSON (e.g. local LLMs)
 
+[intelligence]
+enabled = true
+focus_default_radius = 2
+change_impact_high_ref_threshold = 10
+conventions_enabled = true
+git_context_enabled = true   # why_file, index_status git section
+
 [security]
 enabled = false            # or: codebeacon serve --security
 mode = "balanced"          # strict | balanced | permissive
@@ -68,6 +75,16 @@ See [BENCHMARKS.md](BENCHMARKS.md) for regex vs tree-sitter performance notes.
 | `enabled` | `true` | When true, MCP index/graph tools return short JSON keys and path dictionary refs (`p1`, `s1`) |
 
 Per-call override: pass `"compact": false` on any MCP tool. See [BENCHMARKS.md](BENCHMARKS.md#compact-dictionary-mode-default-on).
+
+## `[intelligence]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | When false, edit-intelligence MCP tools are hidden from `tools/list` |
+| `focus_default_radius` | `2` | BFS hop cap for `focus_context` when `radius` is omitted |
+| `change_impact_high_ref_threshold` | `10` | Reference count above which `change_impact` reports `risk: high` |
+| `conventions_enabled` | `true` | Write `.codeindex/conventions.json` on index rebuild |
+| `git_context_enabled` | `true` | Git subprocess helpers for `why_file` and `index_status` |
 
 ## `[security]`
 

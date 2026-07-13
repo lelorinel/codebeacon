@@ -1,6 +1,8 @@
 pub mod protocol;
 pub mod tools;
 
+pub(crate) mod intelligence_handlers;
+
 use crate::compact::DictSession;
 use crate::config;
 use crate::lsp::client::path_to_uri;
@@ -26,6 +28,7 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
         "tools/list" => McpResponse::result(id, tool_list(
             ctx.map_or(false, |c| c.fs_tools),
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.security.enabled)),
+            ctx.map_or(false, |c| c.repos.iter().any(|r| r.intelligence.enabled)),
         )),
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
@@ -183,6 +186,7 @@ pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_secu
                 lsp_pool,
                 security: cfg.security.to_policy(cli_security),
                 compact: cfg.compact.clone(),
+                intelligence: cfg.intelligence.clone(),
                 dict_session: Mutex::new(DictSession::default()),
             }
         })

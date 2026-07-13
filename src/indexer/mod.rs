@@ -117,29 +117,64 @@ impl Indexer {
         entries
     }
 
+    fn build_package_summaries(
+        repo_root: &Path,
+        graph: &DependencyGraph,
+        packages: &[PackageDetail],
+    ) -> Result<Vec<PackageSummary>> {
+        let cfg = crate::config_file::load(repo_root).unwrap_or_default();
+        let conv_store = if cfg.intelligence.conventions_enabled {
+            let store = crate::intelligence::build_conventions_store(packages, repo_root);
+            let codeindex = codeindex_dir(repo_root);
+            crate::intelligence::write_conventions(&store, &codeindex)?;
+            store
+        } else {
+            crate::intelligence::ConventionsStore::default()
+        };
+
+        let scores = score_files(graph, &[]);
+        let mut summaries: Vec<PackageSummary> = packages
+            .iter()
+            .map(|p| {
+                let avg_score: f32 = if p.files.is_empty() {
+                    0.1
+                } else {
+                    p.files
+                        .iter()
+                        .map(|f| {
+                            let abs = repo_root.join(&f.path);
+                            scores
+                                .get(&abs)
+                                .or_else(|| scores.get(&f.path))
+                                .copied()
+                                .unwrap_or(0.1)
+                        })
+                        .sum::<f32>()
+                        / p.files.len() as f32
+                };
+                PackageSummary {
+                    name: p.name.clone(),
+                    purpose: crate::intelligence::purpose_for_package(
+                        p,
+                        conv_store.packages.get(&p.name),
+                    ),
+                    files: p.files.len(),
+                    score: avg_score,
+                }
+            })
+            .collect();
+
+        summaries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        summaries.retain(|s| s.score >= 0.05);
+        Ok(summaries)
+    }
+
     fn rebuild_index(&mut self, mut files: Vec<FileEntry>) -> Result<()> {
         self.resolve_dependencies(&mut files);
         let codeindex = codeindex_dir(&self.repo_root);
         let packages = group_into_packages(files);
 
-        let scores = score_files(&self.graph, &[]);
-        let mut summaries: Vec<PackageSummary> = packages.iter().map(|p| {
-            let avg_score: f32 = if p.files.is_empty() { 0.1 } else {
-                p.files.iter().map(|f| {
-                    let abs = self.repo_root.join(&f.path);
-                    scores.get(&abs).copied().unwrap_or(0.1)
-                }).sum::<f32>() / p.files.len() as f32
-            };
-            PackageSummary {
-                name: p.name.clone(),
-                purpose: String::new(),
-                files: p.files.len(),
-                score: avg_score,
-            }
-        }).collect();
-
-        summaries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-        summaries.retain(|s| s.score >= 0.05);
+        let summaries = Self::build_package_summaries(&self.repo_root, &self.graph, &packages)?;
 
         let repo_name = self.repo_root.file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -316,23 +351,8 @@ impl Indexer {
         let codeindex = codeindex_dir(&self.repo_root);
         let packages = group_into_packages(entries);
 
-        let scores = score_files(&self.graph, &[]);
-        let mut summaries: Vec<PackageSummary> = packages.iter().map(|p| {
-            let avg_score: f32 = if p.files.is_empty() { 0.1 } else {
-                p.files.iter().map(|f| {
-                    let abs = self.repo_root.join(&f.path);
-                    scores.get(&abs).copied().unwrap_or(0.1)
-                }).sum::<f32>() / p.files.len() as f32
-            };
-            PackageSummary {
-                name: p.name.clone(),
-                purpose: String::new(),
-                files: p.files.len(),
-                score: avg_score,
-            }
-        }).collect();
-        summaries.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-        summaries.retain(|s| s.score >= 0.05);
+        let summaries =
+            Self::build_package_summaries(&self.repo_root, &self.graph, &packages)?;
         let repo_name = self.repo_root.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "repo".into());

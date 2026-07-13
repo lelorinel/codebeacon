@@ -12,9 +12,13 @@ pub use dict::{
     SymbolRef,
 };
 pub use encode::{
-    encode_index_response, encode_package_response, encode_query_matches, path_ref_for,
+    encode_change_impact, encode_focus_response, encode_index_response, encode_package_response,
+    encode_query_matches, encode_task_context, path_ref_for,
 };
-pub use schema::{CompactFileEntry, CompactPackageDetail, CompactRepoIndex, CompactSymbolEntry};
+pub use schema::{
+    CompactChangeImpact, CompactFileEntry, CompactFocusResponse, CompactPackageDetail,
+    CompactRepoIndex, CompactSymbolEntry, CompactTaskContext,
+};
 pub use usage::{boost_hot_symbols, read_usage, record_usage, UsageLog};
 
 use crate::config_file::CompactConfig;

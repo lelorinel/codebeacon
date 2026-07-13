@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-13
+
+### Added
+
+#### Edit intelligence layer
+
+- **`[intelligence]` config** in `.codeindex.toml` — `enabled`, `focus_default_radius`, `change_impact_high_ref_threshold`, `conventions_enabled`, `git_context_enabled` (all on by default).
+- **MCP tools** — hidden from `tools/list` when `[intelligence] enabled = false`:
+  - `focus_context` — BFS subgraph around a file (anchor package, neighbors, symbols).
+  - `task_context` — keyword search + package drill summary; optional `file` for proximity boost.
+  - `change_impact` — symbol blast radius (definition, references, dependent files, `low|medium|high` risk).
+  - `index_status` — index freshness vs working tree (stale files, git dirty count).
+  - `package_conventions` — per-package convention fingerprint (error style, logging, async, tests).
+  - `similar_symbols` — lightweight similarity by kind and signature token overlap.
+  - `api_surface` — public exports per package (language-specific heuristics).
+  - `why_file` — recent git commits, blame snippet, and dependency summary.
+  - `fragile_files` — high-churn files weighted by reverse-dependency count.
+- **Index artifacts** — `.codeindex/conventions.json` written on rebuild; package `purpose` populated from top symbols + convention tags.
+- **Graph** — bidirectional BFS scoring (`score_files_bidirectional`) for edit-time context.
+- **Compact encode** — `focus_context`, `task_context`, and `change_impact` accept `compact` with short keys (`anc`, `nbr`, `rf`, etc.).
+- **CLI** — `codebeacon focus`, `status`, `impact`, `api`, `why`.
+
+```toml
+[intelligence]
+enabled = true
+focus_default_radius = 2
+change_impact_high_ref_threshold = 10
+conventions_enabled = true
+git_context_enabled = true
+```
+
+### Changed
+
+- **README** — essential MCP tools table and CLI quick reference include edit-intelligence commands.
+- **Docs** — [mcp-tools.md](assets/skill/references/mcp-tools.md) edit workflow (`index_status` → `focus_context` → `change_impact` → edit); [CONFIG.md](docs/CONFIG.md) `[intelligence]` section; [ROADMAP.md](docs/ROADMAP.md) change-impact item completed.
+
 ## [0.3.0] - 2026-07-13
 
 ### Added

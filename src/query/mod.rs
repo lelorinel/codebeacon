@@ -15,7 +15,7 @@ pub struct RepoQueryCtx {
     pub root: PathBuf,
     pub index: RepoIndex,
     pub graph: DependencyGraph,
-    packages: HashMap<String, PackageDetail>,
+    pub packages: HashMap<String, PackageDetail>,
 }
 
 impl RepoQueryCtx {
@@ -61,8 +61,21 @@ impl RepoQueryCtx {
 
     /// Ranked search over packages, symbols, and files.
     pub fn query(&self, question: &str, limit: usize) -> Vec<QueryMatch> {
+        self.query_with_active(question, limit, None)
+    }
+
+    /// Like `query`, but boosts proximity to `active_files` when provided.
+    pub fn query_with_active(
+        &self,
+        question: &str,
+        limit: usize,
+        active_files: Option<&[PathBuf]>,
+    ) -> Vec<QueryMatch> {
         let terms = Self::tokenize(question);
-        let bfs_scores = score_files(&self.graph, &[]);
+        let bfs_scores = match active_files {
+            Some(files) if !files.is_empty() => score_files(&self.graph, files),
+            _ => score_files(&self.graph, &[]),
+        };
         let mut matches: Vec<QueryMatch> = Vec::new();
 
         for pkg in &self.index.packages {
@@ -360,7 +373,7 @@ impl RepoQueryCtx {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum MatchKind {
     Package,
     File,
@@ -368,7 +381,7 @@ pub enum MatchKind {
     HotSymbol,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct QueryMatch {
     pub kind: MatchKind,
     pub name: String,

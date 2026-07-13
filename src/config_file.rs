@@ -36,6 +36,9 @@ pub struct CodeIndexConfig {
 
     #[serde(default)]
     pub compact: CompactConfig,
+
+    #[serde(default)]
+    pub intelligence: IntelligenceConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -53,6 +56,7 @@ impl Default for CodeIndexConfig {
             security: SecurityConfig::default(),
             extractor: ExtractorConfig::default(),
             compact: CompactConfig::default(),
+            intelligence: IntelligenceConfig::default(),
         }
     }
 }
@@ -187,6 +191,48 @@ impl Default for CompactConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct IntelligenceConfig {
+    #[serde(default = "default_intelligence_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_focus_radius")]
+    pub focus_default_radius: u32,
+    #[serde(default = "default_impact_threshold")]
+    pub change_impact_high_ref_threshold: u32,
+    #[serde(default = "default_true")]
+    pub conventions_enabled: bool,
+    #[serde(default = "default_true")]
+    pub git_context_enabled: bool,
+}
+
+fn default_intelligence_enabled() -> bool {
+    true
+}
+
+fn default_focus_radius() -> u32 {
+    2
+}
+
+fn default_impact_threshold() -> u32 {
+    10
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for IntelligenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_intelligence_enabled(),
+            focus_default_radius: default_focus_radius(),
+            change_impact_high_ref_threshold: default_impact_threshold(),
+            conventions_enabled: default_true(),
+            git_context_enabled: default_true(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct LspConfig {
     /// Override LSP binary per language, e.g. {"csharp": "OmniSharp"}
@@ -222,6 +268,7 @@ mod tests {
         assert_eq!(cfg.lsp_enrich_timeout_secs, 60);
         assert!(cfg.lsp.overrides.is_empty());
         assert!(cfg.compact.enabled);
+        assert!(cfg.intelligence.enabled);
     }
 
     #[test]

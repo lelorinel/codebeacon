@@ -50,6 +50,9 @@ Rust, Go, Python, TypeScript/JavaScript, C# — regex extraction needs no LSP bi
 | `find_definition` / `find_references` | Track a symbol |
 | `query_context` | Keyword search across packages/files |
 | `get_dependents` | "What breaks if I change this file?" |
+| `index_status` | Is the index stale? Call before editing |
+| `focus_context` | Narrow subgraph around the file you are editing |
+| `change_impact` | Blast radius before changing a symbol |
 
 Full tool list: [mcp-tools.md](assets/skill/references/mcp-tools.md)
 
@@ -59,6 +62,9 @@ Full tool list: [mcp-tools.md](assets/skill/references/mcp-tools.md)
 codebeacon init                              # build .codeindex/
 codebeacon serve                             # MCP server (add --fs-tools or --security as needed)
 codebeacon query "auth"                      # search
+codebeacon focus src/auth.rs                 # edit-time subgraph
+codebeacon status                            # index freshness
+codebeacon impact login                      # symbol blast radius
 codebeacon path src/auth.rs src/db.rs        # shortest dependency chain
 codebeacon report                            # CODEBEACON_REPORT.md
 ```

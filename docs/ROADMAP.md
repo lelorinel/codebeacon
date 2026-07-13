@@ -11,7 +11,7 @@
 ## v0.3 — Planned
 
 - [ ] `codebeacon serve --http` — team MCP endpoint
-- [ ] PR triage / change-impact summaries
+- [x] PR triage / change-impact summaries
 - [ ] Per-edge INFERRED/EXTRACTED metadata in graph
 - [ ] Leiden communities in report
 

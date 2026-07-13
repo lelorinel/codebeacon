@@ -3,6 +3,27 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 pub fn score_files(graph: &DependencyGraph, active_files: &[PathBuf]) -> HashMap<PathBuf, f32> {
+    bfs_scores(graph, active_files, false)
+}
+
+/// BFS from active files following import edges in both directions; per-node max score wins.
+pub fn score_files_bidirectional(
+    graph: &DependencyGraph,
+    active_files: &[PathBuf],
+) -> HashMap<PathBuf, f32> {
+    bfs_scores(graph, active_files, true)
+}
+
+/// Minimum score at or within `radius` hops from anchor (inclusive).
+pub fn min_score_for_radius(radius: u32) -> f32 {
+    hop_score(radius)
+}
+
+fn bfs_scores(
+    graph: &DependencyGraph,
+    active_files: &[PathBuf],
+    bidirectional: bool,
+) -> HashMap<PathBuf, f32> {
     let mut scores: HashMap<PathBuf, f32> = HashMap::new();
     let mut queue: VecDeque<(PathBuf, u32)> = VecDeque::new();
 
@@ -20,6 +41,15 @@ pub fn score_files(graph: &DependencyGraph, active_files: &[PathBuf]) -> HashMap
             if next_score > *entry {
                 *entry = next_score;
                 queue.push_back((neighbor, next_depth));
+            }
+        }
+        if bidirectional {
+            for neighbor in graph.reverse_neighbors(&file) {
+                let entry = scores.entry(neighbor.clone()).or_insert(0.0);
+                if next_score > *entry {
+                    *entry = next_score;
+                    queue.push_back((neighbor, next_depth));
+                }
             }
         }
     }
@@ -75,6 +105,19 @@ mod tests {
         let g = make_graph();
         let scores = score_files(&g, &[PathBuf::from("auth.rs")]);
         assert!((scores[&PathBuf::from("pool.rs")] - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn bidirectional_scores_dependents() {
+        let g = make_graph();
+        let scores = score_files_bidirectional(&g, &[PathBuf::from("db.rs")]);
+        assert!((scores[&PathBuf::from("db.rs")] - 1.0).abs() < 0.001);
+        assert!((scores[&PathBuf::from("auth.rs")] - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn min_score_for_radius_matches_hop() {
+        assert!((min_score_for_radius(2) - 0.25).abs() < 0.001);
     }
 
     #[test]

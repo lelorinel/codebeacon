@@ -48,3 +48,21 @@ Enabled with `codebeacon serve --fs-tools`:
 ## Security
 
 - **verify_security** — CWE-190 Z3 gate (when `--security` enabled)
+
+## Edit intelligence (default on)
+
+Recommended workflow before editing: `index_status` → `focus_context` → `change_impact` → edit.
+
+| Tool | When to use |
+|------|-------------|
+| `index_status` | Check index freshness vs working tree |
+| `focus_context` | Subgraph around the file you are editing |
+| `task_context` | Task keywords + package drill (`query_context` + proximity) |
+| `change_impact` | Blast radius before renaming/changing a symbol |
+| `package_conventions` | How this package writes code (error style, logging, async) |
+| `similar_symbols` | Lightweight symbol similarity |
+| `api_surface` | Public exports for a package |
+| `why_file` | Recent git commits + dependency context |
+| `fragile_files` | High-churn files with many dependents |
+
+CLI: `codebeacon focus`, `status`, `impact`, `api`, `why`. Disable via `[intelligence] enabled = false` in `.codeindex.toml`.

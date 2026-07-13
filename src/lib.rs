@@ -10,6 +10,7 @@ pub mod hook;
 pub mod imports;
 pub mod indexer;
 pub mod install;
+pub mod intelligence;
 pub mod lsp;
 pub mod mcp;
 pub mod query;

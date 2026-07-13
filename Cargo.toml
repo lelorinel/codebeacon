@@ -1,6 +1,6 @@
 [package]
 name = "codebeacon"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Hierarchical code index for AI coding assistants — LSP-backed, MCP-served"
 license = "AGPL-3.0"
@@ -17,8 +17,8 @@ name = "codebeacon"
 path = "src/main.rs"
 
 [[test]]
-name = "indexer_integration"
-path = "tests/integration/indexer_test.rs"
+name = "intelligence_integration"
+path = "tests/integration/intelligence_test.rs"
 
 [[test]]
 name = "extract_corpus"
