@@ -4,8 +4,8 @@
 
 **Get started in 3 steps**
 
-1. `cargo install codebeacon && codebeacon init`
-2. `codebeacon install --platform cursor --project`
+1. `cargo install codebeacon` (or `npx codebeacon`)
+2. `codebeacon install --platform cursor --project` — offers to run `init` if needed (`--yes` to auto-init)
 3. Run `codebeacon serve` in MCP — in every task, call **`get_context`** first (not grep)
 
 If no index exists yet, the AI can call `init_workspace` to build one on demand.
@@ -64,6 +64,7 @@ Full tool list: [mcp-tools.md](assets/skill/references/mcp-tools.md)
 
 ```bash
 codebeacon init                              # build .codeindex/
+codebeacon install --platform cursor --project   # editor + MCP; prompts init if missing
 codebeacon serve                             # MCP server (add --fs-tools or --security as needed)
 codebeacon query "auth"                      # search
 codebeacon focus src/auth.rs                 # edit-time subgraph

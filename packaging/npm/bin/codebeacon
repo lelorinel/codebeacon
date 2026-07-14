@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+"use strict";
+
+const { execFileSync } = require("child_process");
+const { chmodSync } = require("fs");
+const path = require("path");
+const onboard = require("../lib/onboard");
+
+const platform = process.platform;
+const arch = process.arch;
+const packages = {
+  "linux-x64": "codebeacon-linux-x64",
+  "linux-arm64": "codebeacon-linux-arm64",
+  "darwin-x64": "codebeacon-darwin-x64",
+  "darwin-arm64": "codebeacon-darwin-arm64",
+  "win32-x64": "codebeacon-win32-x64",
+};
+
+const pkg = packages[`${platform}-${arch}`];
+if (!pkg) {
+  console.error("Unsupported platform:", platform, arch);
+  process.exit(1);
+}
+
+const bin = require.resolve(
+  `${pkg}/codebeacon${platform === "win32" ? ".exe" : ""}`
+);
+try {
+  chmodSync(bin, 0o755);
+} catch {
+  // Best-effort; some filesystems disallow chmod.
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  let version = "0.0.0";
+  try {
+    version = require(path.join(__dirname, "..", "package.json")).version;
+  } catch {
+    // published package should always have package.json beside bin/
+  }
+
+  const state = onboard.readState(
+    process.env.HOME || require("os").homedir()
+  );
+  const packageMinor = onboard.majorMinor(version);
+
+  if (
+    onboard.shouldOnboard({
+      argv,
+      env: process.env,
+      stdinIsTTY: Boolean(process.stdin.isTTY),
+      stdoutIsTTY: Boolean(process.stdout.isTTY),
+      dismissedMinor: state && state.dismissedMinor,
+      packageMinor,
+    })
+  ) {
+    await onboard.runOnboard({
+      binPath: bin,
+      version,
+      env: process.env,
+    });
+  }
+
+  try {
+    execFileSync(bin, argv, { stdio: "inherit" });
+  } catch (err) {
+    // Forward the native binary's exit code. clap prints help and exits 2 when
+    // no subcommand is given; without this, Node throws a stacktrace after help.
+    if (typeof err.status === "number") {
+      process.exit(err.status);
+    }
+    if (err.signal) {
+      process.kill(process.pid, err.signal);
+    }
+    throw err;
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

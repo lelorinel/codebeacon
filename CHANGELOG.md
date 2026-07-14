@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-14
+
+### Added
+
+- **npx first-run onboarding** — interactive shell alias / PATH / stick-with-npx
+  prompt on eligible npm-wrapper runs (`help` / bare / `init`); dismiss keyed by
+  major.minor in `~/.config/codebeacon/onboarding.json`.
+- **`install` auto-init** — after platform install, if `.codeindex/index.json` is
+  missing, prompt to run `init` (default yes); `--yes`/`-y` skips the prompt;
+  non-TTY skips unless `--yes`.
+
+### Fixed
+
+- **Install** — skill/hook assets are embedded in the binary so `codebeacon install` works from crates.io and release builds (no longer looks for CI `CARGO_MANIFEST_DIR` paths).
+- **npm wrapper** — forward the native binary exit code instead of throwing a Node stacktrace when clap exits non-zero (e.g. `codebeacon` with no args).
+
+### Changed
+
+- **README / INSTALL** — get-started and npm docs cover auto-init and npx onboarding.
+
 ## [0.5.0] - 2026-07-13
 
 ### Added

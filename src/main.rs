@@ -70,6 +70,9 @@ enum Commands {
         fs_tools: bool,
         #[arg(long)]
         list: bool,
+        /// Auto-run `init` when no index exists (non-interactive)
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
     },
     /// Remove Codebeacon integration files
     Uninstall {
@@ -306,6 +309,7 @@ async fn main() -> Result<()> {
             security,
             fs_tools,
             list,
+            yes,
         } => {
             install::run_install(&install::InstallOptions {
                 platform,
@@ -313,6 +317,7 @@ async fn main() -> Result<()> {
                 security,
                 fs_tools,
                 list_only: list,
+                yes,
             })?;
         }
         Commands::Uninstall {

@@ -4,8 +4,8 @@
 
 ```bash
 cargo install codebeacon
-cd your-project && codebeacon init
-codebeacon install --platform cursor --project
+cd your-project
+codebeacon install --platform cursor --project   # prompts to init if needed; or pass --yes
 codebeacon serve    # or let install write MCP config for you
 ```
 
@@ -23,7 +23,20 @@ cargo install codebeacon
 
 ```bash
 npx codebeacon
+# or: npm install -g codebeacon
 ```
+
+On first interactive run of `npx codebeacon` (bare / `help` / `init`), the npm
+wrapper offers to:
+
+1. add a shell **alias** (`codebeacon` → `npx codebeacon`),
+2. put the native binary directory on your **PATH**, or
+3. keep using **`npx codebeacon`** with no shell changes.
+
+Dismissal is stored in `~/.config/codebeacon/onboarding.json` and keyed by
+**major.minor** (e.g. `0.5`). Bumping to `0.6.x` asks again; patch releases do
+not. Skip with `CODEBEACON_SKIP_ONBOARD=1`. Never prompts for `serve` / MCP or
+non-TTY runs.
 
 ### From source
 
@@ -56,6 +69,11 @@ List all: `codebeacon install --list`
 - `--project` — install into current repo (rules, MCP config)
 - `--security` — add `--security` to MCP `serve` args
 - `--fs-tools` — enable file-system MCP tools
+- `--yes` / `-y` — if `.codeindex/index.json` is missing, run `init` without prompting
+
+After a successful install, if there is no index yet and you are on an interactive
+terminal, Codebeacon asks `run init now? [Y/n]` (default yes). Non-interactive
+sessions skip init unless `--yes` is set.
 
 ## MCP configuration
 

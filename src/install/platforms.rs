@@ -1,5 +1,8 @@
 use super::markers::{merge_marked_section, merge_mcp_json, remove_marked_section, remove_mcp_json};
-use super::{copy_skill, mcp_json_block, InstallCtx};
+use super::{
+    copy_skill, mcp_json_block, write_hook_script, InstallCtx, CLAUDE_DISCOVERY_HOOK,
+    CURSOR_HOOKS_EXAMPLE, HOOK_CONTEXT_SH, HOOK_SECURITY_SH,
+};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -134,37 +137,17 @@ fn install_cursor(ctx: &InstallCtx) -> Result<()> {
     let merged = merge_mcp_json(&existing, &block)?;
     write_file(&mcp_path, &merged)?;
 
-    let hooks_example = ctx.manifest_dir.join("assets/hooks/cursor-hooks.json.example");
-    let hook_src = ctx.manifest_dir.join("assets/hooks/codebeacon-context.sh");
-    let security_src = ctx.manifest_dir.join("assets/hooks/codebeacon-security.sh");
-    if hook_src.exists() {
-        let hook_dest = root.join(".cursor/hooks/codebeacon-context.sh");
-        fs::create_dir_all(hook_dest.parent().unwrap())?;
-        fs::copy(&hook_src, &hook_dest)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&hook_dest, fs::Permissions::from_mode(0o755))?;
-        }
-        println!("  wrote {}", hook_dest.display());
-    }
-    if security_src.exists() {
-        let hook_dest = root.join(".cursor/hooks/codebeacon-security.sh");
-        fs::create_dir_all(hook_dest.parent().unwrap())?;
-        fs::copy(&security_src, &hook_dest)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&hook_dest, fs::Permissions::from_mode(0o755))?;
-        }
-        println!("  wrote {}", hook_dest.display());
-    }
-    if hooks_example.exists() {
-        let dest = root.join(".cursor/hooks.json.example");
-        fs::copy(&hooks_example, &dest)?;
-        println!("  wrote {}", dest.display());
-        println!("  hint: cp .cursor/hooks.json.example .cursor/hooks.json to enable hooks");
-    }
+    write_hook_script(
+        &root.join(".cursor/hooks/codebeacon-context.sh"),
+        HOOK_CONTEXT_SH,
+    )?;
+    write_hook_script(
+        &root.join(".cursor/hooks/codebeacon-security.sh"),
+        HOOK_SECURITY_SH,
+    )?;
+    let dest = root.join(".cursor/hooks.json.example");
+    write_file(&dest, CURSOR_HOOKS_EXAMPLE)?;
+    println!("  hint: cp .cursor/hooks.json.example .cursor/hooks.json to enable hooks");
     Ok(())
 }
 
@@ -203,29 +186,20 @@ fn install_claude(ctx: &InstallCtx) -> Result<()> {
     let claude_dir = home_dir()?.join(".claude");
     fs::create_dir_all(&claude_dir)?;
 
-    let hook_src = ctx.manifest_dir.join("assets/hooks/codebeacon-context.sh");
-    let hook_dest = claude_dir.join("hooks/codebeacon-context.sh");
-    if hook_src.exists() {
-        fs::create_dir_all(hook_dest.parent().unwrap())?;
-        fs::copy(&hook_src, &hook_dest)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&hook_dest, fs::Permissions::from_mode(0o755))?;
-        }
-        println!("  wrote {}", hook_dest.display());
-    }
+    write_hook_script(
+        &claude_dir.join("hooks/codebeacon-context.sh"),
+        HOOK_CONTEXT_SH,
+    )?;
 
-    let settings_example = ctx.manifest_dir.join("assets/hooks/claude-discovery-hook.json");
-    if settings_example.exists() {
-        println!(
-            "  hint: merge {} into ~/.claude/settings.json PreToolUse hooks",
-            settings_example.display()
-        );
-    }
+    let discovery_hint = claude_dir.join("hooks/claude-discovery-hook.json.example");
+    write_file(&discovery_hint, CLAUDE_DISCOVERY_HOOK)?;
+    println!(
+        "  hint: merge {} into ~/.claude/settings.json PreToolUse hooks",
+        discovery_hint.display()
+    );
 
     let skill_dest = home_dir()?.join(".claude/skills/codebeacon");
-    copy_skill(&skill_dest, ctx.manifest_dir)?;
+    copy_skill(&skill_dest)?;
     Ok(())
 }
 
@@ -255,20 +229,9 @@ fn install_codex(ctx: &InstallCtx) -> Result<()> {
     let root = super::project_root()?;
     if ctx.project {
         merge_file_markdown(&root.join("AGENTS.md"), AGENTS_SECTION)?;
-    }
 
-    let codex_hooks = root.join(".codex/hooks.json");
-    let hook_cmd = ctx.manifest_dir.join("assets/hooks/codebeacon-context.sh");
-    if hook_cmd.exists() {
-        let rel_hook = if ctx.project {
-            ".codex/hooks/codebeacon-context.sh".to_string()
-        } else {
-            hook_cmd.display().to_string()
-        };
-        if ctx.project {
-            fs::create_dir_all(root.join(".codex/hooks"))?;
-            fs::copy(&hook_cmd, root.join(&rel_hook))?;
-        }
+        let rel_hook = ".codex/hooks/codebeacon-context.sh";
+        write_hook_script(&root.join(rel_hook), HOOK_CONTEXT_SH)?;
         let hooks_json = format!(
             r#"{{
   "hooks": {{
@@ -281,11 +244,11 @@ fn install_codex(ctx: &InstallCtx) -> Result<()> {
   }}
 }}"#
         );
-        write_file(&codex_hooks, &hooks_json)?;
+        write_file(&root.join(".codex/hooks.json"), &hooks_json)?;
     }
 
     let skill_dest = home_dir()?.join(".codex/skills/codebeacon");
-    copy_skill(&skill_dest, ctx.manifest_dir)?;
+    copy_skill(&skill_dest)?;
     Ok(())
 }
 
@@ -310,7 +273,7 @@ fn install_opencode(ctx: &InstallCtx) -> Result<()> {
     fs::create_dir_all(&config_dir)?;
 
     let skill_dest = config_dir.join("skills/codebeacon");
-    copy_skill(&skill_dest, ctx.manifest_dir)?;
+    copy_skill(&skill_dest)?;
 
     let opencode_json = config_dir.join("opencode.json");
     let block = mcp_json_block(ctx.exe, ctx.security, ctx.fs_tools);
@@ -336,7 +299,7 @@ fn install_hermes(ctx: &InstallCtx) -> Result<()> {
     let hermes_dir = home_dir()?.join(".hermes");
     fs::create_dir_all(&hermes_dir)?;
 
-    copy_skill(&hermes_dir.join("skills/codebeacon"), ctx.manifest_dir)?;
+    copy_skill(&hermes_dir.join("skills/codebeacon"))?;
 
     let config_path = hermes_dir.join("config.yaml");
     let mcp_section = format!(
@@ -380,9 +343,9 @@ fn uninstall_hermes(_project: bool, purge: bool) -> Result<()> {
     Ok(())
 }
 
-fn install_agents(ctx: &InstallCtx) -> Result<()> {
+fn install_agents(_ctx: &InstallCtx) -> Result<()> {
     let dest = home_dir()?.join(".agents/skills/codebeacon");
-    copy_skill(&dest, ctx.manifest_dir)
+    copy_skill(&dest)
 }
 
 fn uninstall_agents(_project: bool, purge: bool) -> Result<()> {
