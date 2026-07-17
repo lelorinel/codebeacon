@@ -30,6 +30,18 @@ Call **`get_dependents`** on a file to see what breaks if you change it. CLI: `c
 For multi-step edit loops: **`loop_begin`** → edit → **`loop_record`** → **`loop_tick`** → repeat → **`loop_end`**.  
 CLI: `codebeacon loop begin "goal" --file src/foo.rs`. See [references/loop.md](references/loop.md) or [LOOP.md](../../../docs/LOOP.md).
 
+## File locks (parallel agents) — optional
+
+When multiple agents edit the same workspace, claim paths before shared edits:
+
+1. **`claim_path`** with `path` + `block_key` (your agent/task id) + optional `intent`
+2. If held: **`await_path`** then retry claim
+3. After finishing that path: **`release_path`** with a short summary
+4. End of multi-file task / run-plan block: **`session_done`** (`block_key`, `ok`, summary)
+
+If lock tools are missing or MCP errors "not found": **skip locks** — do not explore MCP catalogs.  
+CLI: `codebeacon run-plan ./plans "prompt"`. See [LOCKS.md](../../../docs/LOCKS.md).
+
 ## Graph queries (Graphify parity)
 
 | Tool | CLI equivalent | Purpose |

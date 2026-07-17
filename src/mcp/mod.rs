@@ -2,6 +2,7 @@ pub mod protocol;
 pub mod tools;
 
 pub(crate) mod intelligence_handlers;
+pub(crate) mod lock_handlers;
 pub(crate) mod loop_handlers;
 
 use crate::compact::DictSession;
@@ -31,6 +32,7 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.security.enabled)),
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.intelligence.enabled)),
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.loop_config.enabled)),
+            ctx.map_or(false, |c| c.lock_store.is_some()),
         )),
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
@@ -56,7 +58,12 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
 ///   2. `CLAUDE_PROJECT_DIR` env var (Claude Code)
 ///   3. `CURSOR_WORKSPACE` env var (Cursor)
 ///   4. `cwd` — works for VS Code, Zed, Cline (they set cwd = workspace folder)
-pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_security: bool) -> Result<()> {
+pub fn run_stdio_server(
+    override_root: Option<PathBuf>,
+    fs_tools: bool,
+    cli_security: bool,
+    no_locks: bool,
+) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut sin = stdin.lock();
@@ -172,6 +179,7 @@ pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_secu
 
     // ── Build tool context ─────────────────────────────────────────────────
     let ctx_repos: Vec<RepoCtx> = repos
+        .clone()
         .into_iter()
         .map(|root| {
             let name = root
@@ -194,7 +202,38 @@ pub fn run_stdio_server(override_root: Option<PathBuf>, fs_tools: bool, cli_secu
             }
         })
         .collect();
-    let ctx = ToolContext { repos: ctx_repos, fs_tools };
+
+    // Path locks: shared file store on the primary (first) repo, unless disabled.
+    let lock_store = {
+        let primary = repos.first();
+        match primary {
+            Some(root) if !no_locks => {
+                let cfg = crate::config_file::load(root).unwrap_or_default();
+                if cfg.locks.enabled {
+                    let allow: Vec<_> = cfg
+                        .locks
+                        .allow
+                        .iter()
+                        .map(std::path::PathBuf::from)
+                        .collect();
+                    Some(crate::locks::SharedLockStore::open_for_project(
+                        root,
+                        cfg.locks.ttl_secs,
+                        allow,
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    };
+
+    let ctx = ToolContext {
+        repos: ctx_repos,
+        fs_tools,
+        lock_store,
+    };
 
     // ── Phase 2: tool loop ─────────────────────────────────────────────────
     // Replay any request that arrived before `initialized` (e.g. LM Studio

@@ -12,10 +12,12 @@ mod hook;
 mod imports;
 mod indexer;
 mod install;
+mod locks;
 mod lsp;
 mod mcp;
 mod query;
 mod report;
+mod run_plan;
 mod security;
 mod types;
 mod verify_cmd;
@@ -46,6 +48,29 @@ enum Commands {
         fs_tools: bool,
         #[arg(long)]
         security: bool,
+        /// Disable multi-agent path lock MCP tools
+        #[arg(long)]
+        no_locks: bool,
+    },
+    /// Run all plan markdown docs in a directory with parallel agents
+    RunPlan {
+        /// Directory containing `*.md` plan files
+        plans_dir: PathBuf,
+        /// Shared prompt injected into every plan brief
+        #[arg(default_value = "")]
+        prompt: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Max concurrent agents (0 = all plans at once)
+        #[arg(long, default_value_t = 0)]
+        parallel: usize,
+        #[arg(long, default_value = "")]
+        model: String,
+        /// Agent provider: cursor | claude | codex
+        #[arg(long, default_value = "cursor")]
+        provider: String,
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Verify a code fragment against the security policy (CWE checks)
     Verify {
@@ -283,8 +308,30 @@ async fn main() -> Result<()> {
                 println!("Index written to {}/.codeindex/", repo.display());
             }
         }
-        Commands::Serve { root, fs_tools, security } => {
-            mcp::run_stdio_server(root, fs_tools, security)?;
+        Commands::Serve { root, fs_tools, security, no_locks } => {
+            mcp::run_stdio_server(root, fs_tools, security, no_locks)?;
+        }
+        Commands::RunPlan {
+            plans_dir,
+            prompt,
+            root,
+            parallel,
+            model,
+            provider,
+            dry_run,
+        } => {
+            let workspace = run_plan::resolve_workspace(root.as_deref());
+            let cfg = config_file::load(&workspace).unwrap_or_default();
+            run_plan::run(run_plan::RunPlanOpts {
+                plans_dir,
+                prompt,
+                workspace,
+                parallel,
+                model,
+                provider: run_plan::RunPlanProvider::parse(&provider)?,
+                dry_run,
+                ttl_secs: cfg.locks.ttl_secs,
+            })?;
         }
         Commands::Verify {
             content,
@@ -717,7 +764,7 @@ mod tests {
         for name in [
             "init", "serve", "verify", "install", "report", "query", "path",
             "explain", "dependents", "focus", "status", "impact", "api", "why", "loop",
-            "export", "hook",
+            "run-plan", "export", "hook",
         ] {
             assert!(
                 cmd.get_subcommands().any(|s| s.get_name() == name),

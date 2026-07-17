@@ -58,7 +58,13 @@ fn compact_property() -> Value {
     })
 }
 
-pub fn tool_list(fs_tools: bool, security: bool, intelligence: bool, loop_enabled: bool) -> Value {
+pub fn tool_list(
+    fs_tools: bool,
+    security: bool,
+    intelligence: bool,
+    loop_enabled: bool,
+    locks_enabled: bool,
+) -> Value {
     let mut tools = vec![
         serde_json::json!({
             "name": "get_context",
@@ -474,6 +480,91 @@ pub fn tool_list(fs_tools: bool, security: bool, intelligence: bool, loop_enable
         ]);
     }
 
+    if locks_enabled {
+        tools.extend([
+            serde_json::json!({
+                "name": "claim_path",
+                "description": "Claim a path for exclusive edit (multi-agent locks). Same block_key renews the lease. If tools missing, skip locks.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "intent": { "type": "string" },
+                        "block_key": { "type": "string", "description": "Agent/task id or run-plan stem" }
+                    },
+                    "required": ["path", "block_key"]
+                }
+            }),
+            serde_json::json!({
+                "name": "release_path",
+                "description": "Release a claimed path and publish a DONE summary for await_path.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "summary": { "type": "string" },
+                        "block_key": { "type": "string" }
+                    },
+                    "required": ["path", "block_key"]
+                }
+            }),
+            serde_json::json!({
+                "name": "await_path",
+                "description": "Wait until a path is free or has a DONE summary (or timeout).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "block_key": { "type": "string" },
+                        "timeout_ms": { "type": "integer" },
+                        "poll_ms": { "type": "integer" }
+                    },
+                    "required": ["path", "block_key"]
+                }
+            }),
+            serde_json::json!({
+                "name": "list_locks",
+                "description": "List active path claims.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "list_done",
+                "description": "List released paths with DONE summaries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "session_done",
+                "description": "Mark a parallel-agent / run-plan session finished. Drops remaining claims for this block_key.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "block_key": { "type": "string" },
+                        "summary": { "type": "string" },
+                        "ok": { "type": "boolean" }
+                    },
+                    "required": ["block_key", "ok"]
+                }
+            }),
+            serde_json::json!({
+                "name": "list_sessions",
+                "description": "List lock sessions (running / done / failed / timed_out).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }),
+        ]);
+    }
+
     serde_json::json!({ "tools": tools })
 }
 
@@ -511,5 +602,26 @@ mod tests {
         let err = McpResponse::error(json!(1), -32600, "Invalid Request");
         let s = serde_json::to_string(&err).unwrap();
         assert!(s.contains("Invalid Request"));
+    }
+
+    #[test]
+    fn tool_list_includes_locks_when_enabled() {
+        let v = tool_list(false, false, false, false, true);
+        let names: Vec<&str> = v["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"claim_path"));
+        assert!(names.contains(&"session_done"));
+        let v2 = tool_list(false, false, false, false, false);
+        let names2: Vec<&str> = v2["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(!names2.contains(&"claim_path"));
     }
 }

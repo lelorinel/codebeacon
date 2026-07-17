@@ -1,6 +1,6 @@
 [package]
 name = "codebeacon"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "Hierarchical code index for AI coding assistants — LSP-backed, MCP-served"
 license = "AGPL-3.0"
@@ -55,6 +55,7 @@ ignore = "0.4"
 toml = "0.8"
 rayon = "1.10"
 regex = "1"
+libc = "0.2"
 z3 = { version = "0.12", optional = true }
 tree-sitter = { version = "0.25", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }

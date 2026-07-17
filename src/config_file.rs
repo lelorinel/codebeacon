@@ -42,6 +42,9 @@ pub struct CodeIndexConfig {
 
     #[serde(default, rename = "loop")]
     pub loop_config: LoopConfig,
+
+    #[serde(default)]
+    pub locks: LocksConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -61,6 +64,7 @@ impl Default for CodeIndexConfig {
             compact: CompactConfig::default(),
             intelligence: IntelligenceConfig::default(),
             loop_config: LoopConfig::default(),
+            locks: LocksConfig::default(),
         }
     }
 }
@@ -333,6 +337,37 @@ impl LoopConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct LocksConfig {
+    /// When true (default), MCP exposes claim_path / release_path / await_path / sessions.
+    #[serde(default = "default_locks_enabled")]
+    pub enabled: bool,
+    /// Claim TTL in seconds (same block_key renews the lease).
+    #[serde(default = "default_lock_ttl_secs")]
+    pub ttl_secs: u64,
+    /// Optional path prefixes allowlist (empty = any relative path under workspace).
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+fn default_locks_enabled() -> bool {
+    true
+}
+
+fn default_lock_ttl_secs() -> u64 {
+    600
+}
+
+impl Default for LocksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_locks_enabled(),
+            ttl_secs: default_lock_ttl_secs(),
+            allow: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct LspConfig {
     /// Override LSP binary per language, e.g. {"csharp": "OmniSharp"}
@@ -490,5 +525,28 @@ max_iterations = 20
         assert_eq!(cfg.loop_config.reindex, ReindexPolicy::IfStale);
         assert_eq!(cfg.loop_config.reindex_every_n, 5);
         assert_eq!(cfg.loop_config.max_iterations, 20);
+    }
+
+    #[test]
+    fn load_parses_locks_section() {
+        let tmp = TempDir::new().unwrap();
+        let config_content = r#"
+[locks]
+enabled = false
+ttl_secs = 120
+allow = ["src", "generated"]
+"#;
+        fs::write(tmp.path().join(".codeindex.toml"), config_content).unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert!(!cfg.locks.enabled);
+        assert_eq!(cfg.locks.ttl_secs, 120);
+        assert_eq!(cfg.locks.allow, vec!["src", "generated"]);
+    }
+
+    #[test]
+    fn locks_default_enabled() {
+        let cfg = CodeIndexConfig::default();
+        assert!(cfg.locks.enabled);
+        assert_eq!(cfg.locks.ttl_secs, 600);
     }
 }

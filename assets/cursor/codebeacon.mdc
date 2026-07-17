@@ -17,3 +17,5 @@ Prefer these over `Read`/`grep` for navigating this codebase.
 When `.codeindex/` exists, the discovery hook reminds you to use Codebeacon first.
 
 Security: if `verify_security` is available, call it before suspicious allocation edits.
+
+Parallel agents: before editing a shared path, call `claim_path` (then `release_path`). If lock tools are missing, skip locks.

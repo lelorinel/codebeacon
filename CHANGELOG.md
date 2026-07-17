@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-18
+
+### Added
+
+#### Multi-agent path locks
+
+- **MCP tools** (default on) — `claim_path`, `release_path`, `await_path`, `list_locks`, `list_done`, `session_done`, `list_sessions`.
+- **File-backed store** — `.codeindex/locks/apply-locks.json` with flock so IDE agents and CLI-spawned agents share claims across processes.
+- **Config** — `[locks]` (`enabled`, `ttl_secs`, `allow`); disable with `codebeacon serve --no-locks`.
+- **Skill / rule** — optional “if lock tools missing, skip” flow in [SKILL.md](assets/skill/SKILL.md) and [codebeacon.mdc](assets/cursor/codebeacon.mdc).
+
+#### `codebeacon run-plan`
+
+- Run every `*.md` in a plans directory with parallel agents, coordinated via the same lock store.
+- **Providers** — `--provider cursor` (default), `claude`, or `codex`.
+  - Cursor: `agent` / `CURSOR_AGENT`
+  - Claude: `claude --print` + run-scoped `--mcp-config` (`CLAUDE_BIN`)
+  - Codex: `codex exec --full-auto --sandbox workspace-write` (`CODEX_BIN`)
+- Flags: `--parallel N`, `--model`, `--dry-run`, `--root`.
+
+### Changed
+
+- **README** — parallel-agents section, `run-plan` CLI example, docs table links [LOCKS.md](docs/LOCKS.md).
+- **Docs** — [LOCKS.md](docs/LOCKS.md), [CONFIG.md](docs/CONFIG.md) `[locks]`, [ROADMAP.md](docs/ROADMAP.md) item completed.
+
 ## [0.5.1] - 2026-07-14
 
 ### Added

@@ -80,3 +80,20 @@ Codebeacon does not run the agent loop — it refreshes context each iteration.
 
 Workflow: `loop_begin` → work → `loop_record` → `loop_tick` → repeat → `loop_end`.  
 CLI: `codebeacon loop begin|tick|record|end|watch`. See [LOOP.md](docs/LOOP.md).
+
+## Path locks (parallel agents; default on)
+
+File-backed locks under `.codeindex/locks/`. Disable with `codebeacon serve --no-locks` or `[locks] enabled = false`.
+
+| Tool | When to use |
+|------|-------------|
+| `claim_path` | Before editing a shared path (`path`, `block_key`, optional `intent`) |
+| `release_path` | After finishing that path (optional `summary` for awaiters) |
+| `await_path` | Wait until path is free or has a DONE summary |
+| `list_locks` / `list_done` | Inspect coordination state |
+| `session_done` | End a run-plan / parallel-agent session; drops remaining claims |
+| `list_sessions` | running / done / failed / timed_out |
+
+If these tools are missing: **skip locks** — do not explore MCP catalogs.
+
+CLI: `codebeacon run-plan ./plans "shared prompt" [--parallel N] [--dry-run]`. See [LOCKS.md](../../../docs/LOCKS.md).

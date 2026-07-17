@@ -15,7 +15,9 @@ use crate::security::{decide, verify_fragment, GateAction, SecurityPolicy};
 use anyhow::{Context, Result};
 
 use crate::mcp::intelligence_handlers;
+use crate::mcp::lock_handlers;
 use crate::mcp::loop_handlers;
+use crate::locks::SharedLockStore;
 use serde_json::Value;
 use std::path::{Component, PathBuf};
 use std::sync::Mutex;
@@ -87,6 +89,8 @@ pub struct ToolContext {
     /// When false, file-system tools (read_file, write_file, edit_file,
     /// list_directory) are disabled. Enable with `codebeacon serve --fs-tools`.
     pub fs_tools: bool,
+    /// Shared path-lock store (None when locks disabled).
+    pub lock_store: Option<SharedLockStore>,
 }
 
 impl ToolContext {
@@ -133,6 +137,13 @@ pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
         "loop_tick"        => loop_handlers::handle_loop_tick(ctx, args),
         "loop_record"      => loop_handlers::handle_loop_record(ctx, args),
         "loop_end"         => loop_handlers::handle_loop_end(ctx, args),
+        "claim_path"       => lock_handlers::handle_claim_path(ctx, args),
+        "release_path"     => lock_handlers::handle_release_path(ctx, args),
+        "await_path"       => lock_handlers::handle_await_path(ctx, args),
+        "list_locks"       => lock_handlers::handle_list_locks(ctx, args),
+        "list_done"        => lock_handlers::handle_list_done(ctx, args),
+        "session_done"     => lock_handlers::handle_session_done(ctx, args),
+        "list_sessions"    => lock_handlers::handle_list_sessions(ctx, args),
         "read_file" | "write_file" | "edit_file" | "list_directory" => {
             if !ctx.fs_tools {
                 anyhow::bail!(
@@ -1101,6 +1112,7 @@ mod tests {
         ToolContext {
             repos: vec![test_repo_ctx("test", tmp.path())],
             fs_tools: true,
+            lock_store: None,
         }
     }
 
@@ -1465,6 +1477,7 @@ mod tests {
                 test_repo_ctx("repoB", tmp_b.path()),
             ],
             fs_tools: false,
+            lock_store: None,
         };
 
         let result = handle_get_context(&ctx, &serde_json::json!({})).unwrap();
@@ -1487,6 +1500,7 @@ mod tests {
                 test_repo_ctx("repoB", tmp_b.path()),
             ],
             fs_tools: false,
+            lock_store: None,
         };
 
         // With `repo: "repoA"` filter, returns single-repo format (no envelope)
@@ -1541,6 +1555,7 @@ mod tests {
                 test_repo_ctx("repoB", tmp_b.path()),
             ],
             fs_tools: false,
+            lock_store: None,
         };
 
         let result =
@@ -1564,6 +1579,7 @@ mod tests {
         let ctx = ToolContext {
             repos: vec![test_repo_ctx("simple_rust", &root)],
             fs_tools: false,
+            lock_store: None,
         };
         let result = handle_shortest_path(
             &ctx,
@@ -1592,6 +1608,7 @@ mod tests {
         let ctx = ToolContext {
             repos: vec![test_repo_ctx("simple_rust", &root)],
             fs_tools: false,
+            lock_store: None,
         };
         let result = handle_hotspots(&ctx, &serde_json::json!({"limit": 5, "compact": false})).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();

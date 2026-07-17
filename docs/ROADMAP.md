@@ -8,7 +8,11 @@
 - Optional tree-sitter extraction for Rust, Go, Python, TypeScript/JS, C# (`tree-sitter` feature)
 - Multi-platform install (Cursor, Claude, Codex, OpenCode, Hermes, agents, VS Code)
 
-## v0.5 — Planned
+## v0.6 — Released
+
+- [x] Multi-agent path locks + `run-plan` — [LOCKS.md](LOCKS.md)
+
+## v0.5 — Released
 
 - [x] Loop Context Coordinator — `loop_begin` / `loop_tick` / `loop_record` / `loop_end`, CLI `loop watch`, [LOOP.md](LOOP.md)
 

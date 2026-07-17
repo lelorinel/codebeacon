@@ -46,6 +46,11 @@ persist_sessions = true
 prefetch_on_tick = ["index_status", "focus_context"]
 default_focus_radius = 2
 
+[locks]
+enabled = true
+ttl_secs = 600
+# allow = ["src"]              # empty = any relative path under workspace
+
 [security]
 enabled = false            # or: codebeacon serve --security
 mode = "balanced"          # strict | balanced | permissive
@@ -108,6 +113,16 @@ Per-call override: pass `"compact": false` on any MCP tool. See [BENCHMARKS.md](
 | `persist_sessions` | `true` | Write session state under `.codeindex/loop/<session_id>/` |
 | `prefetch_on_tick` | `index_status`, `focus_context` | Bundle sections to include; add `task_context` if needed |
 | `default_focus_radius` | `2` | BFS radius for focus in loop ticks (0 → use `[intelligence]` value) |
+
+## `[locks]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | When false (or `serve --no-locks`), path-lock MCP tools are hidden |
+| `ttl_secs` | `600` | Claim lease TTL; same `block_key` renews |
+| `allow` | `[]` | Optional path prefixes; empty accepts any relative path (no `..`) |
+
+See [LOCKS.md](LOCKS.md).
 
 ## `[security]`
 

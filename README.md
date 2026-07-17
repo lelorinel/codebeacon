@@ -58,6 +58,24 @@ Rust, Go, Python, TypeScript/JavaScript, C# — regex extraction needs no LSP bi
 
 `loop_begin` → edit → `loop_record` → `loop_tick` → repeat → `loop_end`. Details: [LOOP.md](docs/LOOP.md).
 
+### Parallel agents
+
+When several agents edit the same workspace:
+
+1. `claim_path` (path + your `block_key`) → edit → `release_path`
+2. If held: `await_path`, then retry claim
+3. If lock tools are missing: **skip** — do not explore MCP catalogs
+
+Batch a plans folder with Cursor, Claude, or Codex:
+
+```bash
+codebeacon run-plan ./plans "implement these"
+codebeacon run-plan ./plans "…" --provider claude
+codebeacon run-plan ./plans "…" --provider codex --parallel 2
+```
+
+Details: [LOCKS.md](docs/LOCKS.md).
+
 Full tool list: [mcp-tools.md](assets/skill/references/mcp-tools.md)
 
 ### CLI
@@ -69,10 +87,13 @@ codebeacon serve                             # MCP server (add --fs-tools or --s
 codebeacon query "auth"                      # search
 codebeacon focus src/auth.rs                 # edit-time subgraph
 codebeacon loop begin "fix login" --file src/auth.rs
-codebeacon status                            # index freshness
-codebeacon impact login                      # symbol blast radius
-codebeacon path src/auth.rs src/db.rs        # shortest dependency chain
-codebeacon report                            # CODEBEACON_REPORT.md
+codebeacon run-plan ./plans "implement these"          # parallel agents + path locks
+codebeacon run-plan ./plans "…" --provider claude       # Claude Code CLI
+codebeacon run-plan ./plans "…" --provider codex        # Codex CLI
+codebeacon status                                      # index freshness
+codebeacon impact login                                # symbol blast radius
+codebeacon path src/auth.rs src/db.rs                  # shortest dependency chain
+codebeacon report                                      # CODEBEACON_REPORT.md
 ```
 
 Install for your editor: `codebeacon install --list` — see [INSTALL.md](docs/INSTALL.md).
@@ -109,6 +130,7 @@ Full schema: [CONFIG.md](docs/CONFIG.md).
   packages/         ← Level 1 detail (on demand)
   graph.bin         ← dependency graph (daemon)
   dict.json         ← path refs for compact mode
+  locks/            ← multi-agent path claims (apply-locks.json)
 ```
 
 ---
@@ -119,6 +141,8 @@ Full schema: [CONFIG.md](docs/CONFIG.md).
 |-----|----------|
 | [INSTALL.md](docs/INSTALL.md) | Platform setup, MCP, hooks, LM Studio |
 | [CONFIG.md](docs/CONFIG.md) | `.codeindex.toml` reference |
+| [LOCKS.md](docs/LOCKS.md) | Path locks + `run-plan` (Cursor / Claude / Codex) |
+| [LOOP.md](docs/LOOP.md) | Loop context coordinator |
 | [BENCHMARKS.md](docs/BENCHMARKS.md) | Token savings, relevance scoring, compact mode |
 | [SECURITY_EDIT_PATHS.md](docs/SECURITY_EDIT_PATHS.md) | Security coverage matrix |
 | [TEAM.md](docs/TEAM.md) · [ROADMAP.md](docs/ROADMAP.md) | Team workflow and roadmap |
