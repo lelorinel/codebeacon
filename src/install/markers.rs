@@ -101,6 +101,99 @@ pub fn remove_mcp_json(existing: &str) -> Result<String, serde_json::Error> {
     Ok(serde_json::to_string_pretty(&root)?)
 }
 
+/// Markers for Codex `config.toml` MCP block (OpenAI: `[mcp_servers.<name>]`).
+pub const CODEX_MCP_START: &str = "# codebeacon-mcp-start";
+pub const CODEX_MCP_END: &str = "# codebeacon-mcp-end";
+
+fn escape_toml_basic(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Build the marked `[mcp_servers.codebeacon]` block for Codex config.toml.
+pub fn codex_mcp_toml_block(exe: &str, args: &[String]) -> String {
+    let args_toml: Vec<String> = args
+        .iter()
+        .map(|a| format!("\"{}\"", escape_toml_basic(a)))
+        .collect();
+    format!(
+        "{CODEX_MCP_START}\n[mcp_servers.codebeacon]\ncommand = \"{}\"\nargs = [{}]\n{CODEX_MCP_END}\n",
+        escape_toml_basic(exe),
+        args_toml.join(", ")
+    )
+}
+
+/// Insert or replace the marked Codex MCP block in config.toml text.
+pub fn merge_codex_mcp_toml(existing: &str, exe: &str, args: &[String]) -> String {
+    let block = codex_mcp_toml_block(exe, args);
+    if let Some(start) = existing.find(CODEX_MCP_START) {
+        if let Some(end) = existing.find(CODEX_MCP_END) {
+            let before = &existing[..start];
+            let after = &existing[end + CODEX_MCP_END.len()..];
+            let after = after.strip_prefix('\n').unwrap_or(after);
+            let mut out = String::new();
+            out.push_str(before);
+            out.push_str(&block);
+            out.push_str(after);
+            return out;
+        }
+    }
+    // Also replace a bare [mcp_servers.codebeacon] table if present without markers.
+    if let Some(replaced) = replace_bare_codex_mcp_table(existing, &block) {
+        return replaced;
+    }
+    if existing.trim().is_empty() {
+        block
+    } else {
+        let mut out = existing.trim_end().to_string();
+        out.push_str("\n\n");
+        out.push_str(&block);
+        out
+    }
+}
+
+fn replace_bare_codex_mcp_table(existing: &str, block: &str) -> Option<String> {
+    let header = "[mcp_servers.codebeacon]";
+    let start = existing.find(header)?;
+    let rest = &existing[start + header.len()..];
+    let rel_end = rest
+        .find("\n[")
+        .map(|i| i + 1) // keep the following [
+        .unwrap_or(rest.len());
+    let end = start + header.len() + rel_end;
+    let before = &existing[..start];
+    let after = &existing[end..];
+    let after = after.strip_prefix('\n').unwrap_or(after);
+    let mut out = String::new();
+    out.push_str(before);
+    out.push_str(block);
+    out.push_str(after);
+    Some(out)
+}
+
+/// Remove marked (or bare) Codex MCP codebeacon table from config.toml.
+pub fn remove_codex_mcp_toml(existing: &str) -> String {
+    if let Some(start) = existing.find(CODEX_MCP_START) {
+        if let Some(end) = existing.find(CODEX_MCP_END) {
+            let before = &existing[..start];
+            let after = &existing[end + CODEX_MCP_END.len()..];
+            let after = after.strip_prefix('\n').unwrap_or(after);
+            return format!("{before}{after}")
+                .trim_end()
+                .to_string()
+                + if before.is_empty() && after.is_empty() {
+                    ""
+                } else {
+                    "\n"
+                };
+        }
+    }
+    if let Some(cleaned) = replace_bare_codex_mcp_table(existing, "") {
+        return cleaned.trim_end().to_string()
+            + if cleaned.trim().is_empty() { "" } else { "\n" };
+    }
+    existing.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +240,36 @@ mod tests {
         let out = merge_mcp_json(existing, block).unwrap();
         assert!(out.contains("/new/codebeacon"));
         assert!(!out.contains("// codebeacon"));
+    }
+
+    #[test]
+    fn merge_codex_mcp_toml_writes_absolute_command() {
+        let args = vec!["serve".into()];
+        let out = merge_codex_mcp_toml("", "/home/me/.cargo/bin/codebeacon", &args);
+        assert!(out.contains("[mcp_servers.codebeacon]"));
+        assert!(out.contains("command = \"/home/me/.cargo/bin/codebeacon\""));
+        assert!(out.contains("args = [\"serve\"]"));
+        assert!(out.contains(CODEX_MCP_START));
+    }
+
+    #[test]
+    fn merge_codex_mcp_toml_idempotent_and_preserves_other() {
+        let existing = "model = \"o4-mini\"\n\n[mcp_servers.other]\ncommand = \"npx\"\n";
+        let args = vec!["serve".into()];
+        let once = merge_codex_mcp_toml(existing, "/bin/codebeacon", &args);
+        let twice = merge_codex_mcp_toml(&once, "/bin/codebeacon2", &args);
+        assert_eq!(twice.matches(CODEX_MCP_START).count(), 1);
+        assert!(twice.contains("/bin/codebeacon2"));
+        assert!(twice.contains("model = \"o4-mini\""));
+        assert!(twice.contains("[mcp_servers.other]"));
+    }
+
+    #[test]
+    fn remove_codex_mcp_toml_strips_block() {
+        let args = vec!["serve".into()];
+        let merged = merge_codex_mcp_toml("foo = 1\n", "/x/codebeacon", &args);
+        let removed = remove_codex_mcp_toml(&merged);
+        assert!(!removed.contains("codebeacon"));
+        assert!(removed.contains("foo = 1"));
     }
 }

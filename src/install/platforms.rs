@@ -57,7 +57,7 @@ pub fn all_platforms() -> Vec<Platform> {
         },
         Platform {
             id: "codex",
-            description: "Codex — AGENTS.md + .codex/hooks.json",
+            description: "Codex — AGENTS.md + ~/.codex/config.toml MCP + hooks",
             kind: PlatformKind::Both,
             install_fn: install_codex,
             uninstall_fn: uninstall_codex,
@@ -227,6 +227,20 @@ Graph: `query_context`, `shortest_path`, `hotspots`. Impact: `get_dependents`. S
 
 fn install_codex(ctx: &InstallCtx) -> Result<()> {
     let root = super::project_root()?;
+    let args = super::mcp_args(ctx.security, ctx.fs_tools);
+
+    // User-level Codex MCP (primary): ~/.codex/config.toml
+    // https://developers.openai.com/codex/mcp — key must be mcp_servers
+    let codex_home = home_dir()?.join(".codex");
+    fs::create_dir_all(&codex_home)?;
+    let user_cfg = codex_home.join("config.toml");
+    let existing = fs::read_to_string(&user_cfg).unwrap_or_default();
+    write_file(
+        &user_cfg,
+        &super::markers::merge_codex_mcp_toml(&existing, ctx.exe, &args),
+    )?;
+    println!("  wrote MCP [mcp_servers.codebeacon] → {}", user_cfg.display());
+
     if ctx.project {
         merge_file_markdown(&root.join("AGENTS.md"), AGENTS_SECTION)?;
 
@@ -245,6 +259,20 @@ fn install_codex(ctx: &InstallCtx) -> Result<()> {
 }}"#
         );
         write_file(&root.join(".codex/hooks.json"), &hooks_json)?;
+
+        // Project-scoped MCP (trusted projects only)
+        let proj_codex = root.join(".codex");
+        fs::create_dir_all(&proj_codex)?;
+        let proj_cfg = proj_codex.join("config.toml");
+        let existing = fs::read_to_string(&proj_cfg).unwrap_or_default();
+        write_file(
+            &proj_cfg,
+            &super::markers::merge_codex_mcp_toml(&existing, ctx.exe, &args),
+        )?;
+        println!(
+            "  wrote project MCP → {} (requires trusted project in Codex)",
+            proj_cfg.display()
+        );
     }
 
     let skill_dest = home_dir()?.join(".codex/skills/codebeacon");
@@ -254,6 +282,14 @@ fn install_codex(ctx: &InstallCtx) -> Result<()> {
 
 fn uninstall_codex(project: bool, purge: bool) -> Result<()> {
     let root = super::project_root()?;
+    let user_cfg = home_dir()?.join(".codex/config.toml");
+    if user_cfg.exists() {
+        let existing = fs::read_to_string(&user_cfg)?;
+        write_file(
+            &user_cfg,
+            &super::markers::remove_codex_mcp_toml(&existing),
+        )?;
+    }
     if project {
         let path = root.join("AGENTS.md");
         if path.exists() {
@@ -261,6 +297,14 @@ fn uninstall_codex(project: bool, purge: bool) -> Result<()> {
             write_file(&path, &remove_marked_section(&existing))?;
         }
         let _ = fs::remove_file(root.join(".codex/hooks.json"));
+        let proj_cfg = root.join(".codex/config.toml");
+        if proj_cfg.exists() {
+            let existing = fs::read_to_string(&proj_cfg)?;
+            write_file(
+                &proj_cfg,
+                &super::markers::remove_codex_mcp_toml(&existing),
+            )?;
+        }
     }
     if purge {
         let _ = fs::remove_dir_all(home_dir()?.join(".codex/skills/codebeacon"));

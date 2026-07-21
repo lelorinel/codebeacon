@@ -1,6 +1,6 @@
 [package]
 name = "codebeacon"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 description = "Hierarchical code index for AI coding assistants — LSP-backed, MCP-served"
 license = "AGPL-3.0"

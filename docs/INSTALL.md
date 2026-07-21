@@ -56,7 +56,7 @@ cargo build --release --features tree-sitter
 |----------|---------|---------------------|
 | Cursor | `codebeacon install --platform cursor --project` | `.cursor/rules/codebeacon.mdc`, `.cursor/mcp.json` |
 | Claude | `codebeacon install --platform claude` | `~/.claude/skills/codebeacon/`, discovery hook |
-| Codex | `codebeacon install --platform codex --project` | `AGENTS.md`, `.codex/hooks.json` |
+| Codex | `codebeacon install --platform codex --project` | `AGENTS.md`, `~/.codex/config.toml` (`[mcp_servers.codebeacon]`), `.codex/hooks.json` + project `.codex/config.toml` |
 | OpenCode | `codebeacon install --platform opencode` | `~/.config/opencode/skills/codebeacon/` |
 | Hermes | `codebeacon install --platform hermes` | `~/.hermes/skills/codebeacon/` |
 | Agents | `codebeacon install --platform agents` | `~/.agents/skills/codebeacon/` |
@@ -109,6 +109,18 @@ Claude Code sets `CLAUDE_PROJECT_DIR` when launching the server — no `--root` 
 ### Cursor
 
 `codebeacon install --platform cursor --project` writes `.cursor/mcp.json`. Cursor sets `CURSOR_WORKSPACE` automatically.
+
+### Codex
+
+`codebeacon install --platform codex` writes OpenAI Codex MCP into **`~/.codex/config.toml`**:
+
+```toml
+[mcp_servers.codebeacon]
+command = "/absolute/path/to/codebeacon"
+args = ["serve"]
+```
+
+With `--project`, also writes `.codex/config.toml` in the repo (Codex only loads project MCP for **trusted** projects). Restart Codex after install. The `command` must be an absolute path (Codex often has a minimal `PATH`).
 
 ### VS Code, Zed, Cline
 

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-21
+
+### Fixed
+
+- **Codex install** — writes `[mcp_servers.codebeacon]` into `~/.codex/config.toml` (and project `.codex/config.toml` with `--project`) using an absolute `codebeacon` path, matching [Codex MCP config](https://developers.openai.com/codex/mcp).
+
 ## [0.7.1] - 2026-07-21
 
 ### Changed
