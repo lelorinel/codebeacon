@@ -86,14 +86,22 @@ pub fn lsp_enrich(repo_root: &Path, lsp_overrides: HashMap<String, String>) -> R
     Ok(())
 }
 
-pub async fn start(repo_root: PathBuf) -> Result<()> {
+pub async fn start(repo_root: PathBuf, docs_root: Option<PathBuf>) -> Result<()> {
     tracing::info!("Starting codebeacon daemon for {}", repo_root.display());
 
-    let mut indexer = Indexer::new(&repo_root);
+    let mut indexer = Indexer::with_docs(&repo_root, docs_root.as_deref());
+    // Prefer explicit docs_root from serve even if config also set
+    if docs_root.is_some() {
+        indexer.docs_root = docs_root.clone();
+    }
 
     // Re-index files changed while the daemon was offline
     if let Err(e) = indexer.catchup_index() {
         tracing::warn!("catch-up index failed: {e}");
+    }
+
+    if let Err(e) = indexer.reindex_docs_if_enabled(true) {
+        tracing::warn!("docs reindex on start failed: {e}");
     }
 
     // Faz 2: LSP background enrichment (runs once after heuristic index is ready)
@@ -132,6 +140,40 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
             .unwrap_or(&changed_file)
             .to_path_buf();
 
+        let is_doc = matches!(
+            changed_file.extension().and_then(|e| e.to_str()),
+            Some("md") | Some("mdx")
+        ) && indexer
+            .docs_root
+            .as_ref()
+            .map(|d| changed_file.starts_with(d))
+            .unwrap_or(false);
+
+        if is_doc {
+            match crate::docs::reindex_docs(
+                &repo_root,
+                indexer.docs_root.as_ref().unwrap(),
+                true,
+            ) {
+                Ok(mut idx) => {
+                    let rel_s = rel.to_string_lossy().replace('\\', "/");
+                    crate::docs::clear_stale_for_docs_file(&mut idx, &rel_s);
+                    if let Err(e) =
+                        crate::docs::write_docs_index(&idx, &crate::config::codeindex_dir(&repo_root))
+                    {
+                        tracing::warn!("docs write error: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("docs reindex error: {e}"),
+            }
+            continue;
+        }
+
+        if detect_language(&changed_file).is_none() && changed_file.exists() {
+            // Non-code, non-docs under watch — ignore for code index
+            continue;
+        }
+
         if changed_file.exists() {
             let extracted = indexer.extract_file(&changed_file);
             let entry = FileEntry {
@@ -140,7 +182,7 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
                 depends_on: vec![],
                 depended_by: vec![],
             };
-            entry_map.insert(rel, entry);
+            entry_map.insert(rel.clone(), entry);
         } else {
             // File was deleted
             entry_map.remove(&rel);
@@ -150,6 +192,12 @@ pub async fn start(repo_root: PathBuf) -> Result<()> {
             tracing::warn!("Index error: {e}");
         } else if let Err(e) = indexer.save_graph() {
             tracing::warn!("Graph save error: {e}");
+        }
+
+        if indexer.docs_root.is_some() {
+            if let Err(e) = crate::docs::mark_stale_for_code_path(&repo_root, &rel) {
+                tracing::warn!("docs stale mark error: {e}");
+            }
         }
     }
 
@@ -192,7 +240,7 @@ mod tests {
         let handle = tokio::spawn(async move {
             let _ = tokio::time::timeout(
                 Duration::from_secs(1),
-                start(root.clone())
+                start(root.clone(), None)
             ).await;
         });
 

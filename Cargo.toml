@@ -56,6 +56,10 @@ toml = "0.8"
 rayon = "1.10"
 regex = "1"
 libc = "0.2"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+portable-pty = "0.9"
+vt100 = "0.15"
 z3 = { version = "0.12", optional = true }
 tree-sitter = { version = "0.25", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }

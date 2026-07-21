@@ -37,15 +37,32 @@ pub struct Indexer {
     pub repo_root: PathBuf,
     pub graph: DependencyGraph,
     pub config: CodeIndexConfig,
+    /// Absolute path to docs directory when sidecar docs indexing is enabled.
+    pub docs_root: Option<PathBuf>,
 }
 
 impl Indexer {
     pub fn new(repo_root: &Path) -> Self {
+        Self::with_docs(repo_root, None)
+    }
+
+    /// Create an indexer; `cli_docs` overrides `[docs].path` from config when set.
+    pub fn with_docs(repo_root: &Path, cli_docs: Option<&Path>) -> Self {
         let codeindex = codeindex_dir(repo_root);
         let graph_path = codeindex.join("graph.bin");
         let graph = persistence::load(&graph_path).unwrap_or_default();
         let config = crate::config_file::load(repo_root).unwrap_or_default();
-        Self { repo_root: repo_root.to_path_buf(), graph, config }
+        let docs_root = crate::docs::index::resolve_docs_root(
+            repo_root,
+            cli_docs,
+            config.docs.path.as_deref(),
+        );
+        Self {
+            repo_root: repo_root.to_path_buf(),
+            graph,
+            config,
+            docs_root,
+        }
     }
 
     pub fn extract_file(&self, path: &Path) -> ExtractResult {
@@ -385,6 +402,15 @@ impl Indexer {
 
         self.rebuild_index(all_entries)?;
         self.save_graph()?;
+        self.reindex_docs_if_enabled(false)?;
+        Ok(())
+    }
+
+    /// Rebuild sidecar docs index when `docs_root` is set.
+    pub fn reindex_docs_if_enabled(&self, preserve_stale: bool) -> Result<()> {
+        if let Some(ref docs) = self.docs_root {
+            crate::docs::reindex_docs(&self.repo_root, docs, preserve_stale)?;
+        }
         Ok(())
     }
 

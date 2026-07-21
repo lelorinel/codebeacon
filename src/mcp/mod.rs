@@ -1,6 +1,8 @@
 pub mod protocol;
 pub mod tools;
 
+pub(crate) mod conductor_handlers;
+pub(crate) mod docs_handlers;
 pub(crate) mod intelligence_handlers;
 pub(crate) mod lock_handlers;
 pub(crate) mod loop_handlers;
@@ -33,6 +35,8 @@ pub fn handle_request_inner(req: McpRequest, ctx: Option<&ToolContext>) -> McpRe
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.intelligence.enabled)),
             ctx.map_or(false, |c| c.repos.iter().any(|r| r.loop_config.enabled)),
             ctx.map_or(false, |c| c.lock_store.is_some()),
+            ctx.map_or(false, |c| c.repos.iter().any(|r| r.docs_root.is_some())),
+            ctx.map_or(false, conductor_handlers::conductor_tools_enabled),
         )),
         "tools/call" => {
             let params = req.params.unwrap_or(json!({}));
@@ -63,6 +67,7 @@ pub fn run_stdio_server(
     fs_tools: bool,
     cli_security: bool,
     no_locks: bool,
+    cli_docs: Option<PathBuf>,
 ) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -170,8 +175,16 @@ pub fn run_stdio_server(
     // Use the tokio runtime handle — safe because we're inside #[tokio::main].
     let tokio_handle = tokio::runtime::Handle::current();
     for repo in repos.clone() {
+        let docs_for_daemon = {
+            let cfg = crate::config_file::load(&repo).unwrap_or_default();
+            crate::docs::index::resolve_docs_root(
+                &repo,
+                cli_docs.as_deref(),
+                cfg.docs.path.as_deref(),
+            )
+        };
         tokio_handle.spawn(async move {
-            if let Err(e) = crate::daemon::start(repo).await {
+            if let Err(e) = crate::daemon::start(repo, docs_for_daemon).await {
                 tracing::error!("Daemon error: {e}");
             }
         });
@@ -188,6 +201,11 @@ pub fn run_stdio_server(
                 .unwrap_or_else(|| "repo".into());
             let root_uri = path_to_uri(&root);
             let cfg = crate::config_file::load(&root).unwrap_or_default();
+            let docs_root = crate::docs::index::resolve_docs_root(
+                &root,
+                cli_docs.as_deref(),
+                cfg.docs.path.as_deref(),
+            );
             let lsp_pool =
                 Mutex::new(LspPool::new(&root_uri).with_overrides(cfg.lsp.overrides.clone()));
             RepoCtx {
@@ -199,6 +217,7 @@ pub fn run_stdio_server(
                 intelligence: cfg.intelligence.clone(),
                 loop_config: cfg.loop_config.clone(),
                 dict_session: Mutex::new(DictSession::default()),
+                docs_root,
             }
         })
         .collect();

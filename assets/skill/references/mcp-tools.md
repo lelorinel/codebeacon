@@ -31,6 +31,24 @@ CLI: `codebeacon query "auth" --compact` (omit flag to follow config; default co
 
 `from`, `to`, and `file` accept dict refs (`p1`) or full paths.
 
+## Docs tools (when `--docs` / `[docs] path` enabled)
+
+Sidecar index: `.codeindex/docs.json` (not mixed into code L0).
+
+- **query_docs** — Keyword search over markdown headings + snippets. Args: `question`, `limit?`, `repo?`
+- **resolve_doc** — Anchor resolve. Args: `reference` (`docs/a.md::## Auth` | `path::Symbol` | `path#N-M`), `repo?`
+- **docs_status** — Stale sections + broken `<!-- codebeacon: … -->` links. Args: `repo?`
+- **update_docs** — Update brief for stale/selected sections (**does not write MD**). Args: `section?`, `repo?`
+
+Link code from a section body:
+
+```html
+<!-- codebeacon: src/auth.rs -->
+<!-- codebeacon: src/auth.rs::AuthService -->
+```
+
+CLI: `codebeacon init --docs ./docs`, `codebeacon docs query|resolve|status`.
+
 ## Resource equivalents
 
 | URI | Tool fallback |
@@ -94,6 +112,17 @@ File-backed locks under `.codeindex/locks/`. Disable with `codebeacon serve --no
 | `session_done` | End a run-plan / parallel-agent session; drops remaining claims |
 | `list_sessions` | running / done / failed / timed_out |
 
+### Conductor mode (`codebeacon multi-agent --mode conductor`)
+
+Available while an active conductor session exists (`.codeindex/multi-agent/ACTIVE`):
+
+| Tool | When to use |
+|------|-------------|
+| `spawn_agent` | Conductor only — enqueue an ensemble agent (`prompt`, optional `block_key`, `model`) |
+| `list_agents` | List conductor + ensemble members |
+| `agent_status` | Status for one `block_key` |
+
 If these tools are missing: **skip locks** — do not explore MCP catalogs.
 
 CLI: `codebeacon run-plan ./plans "shared prompt" [--parallel N] [--dry-run]`. See [LOCKS.md](../../../docs/LOCKS.md).
+`codebeacon multi-agent [--mode gallery|conductor]`.

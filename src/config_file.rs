@@ -45,6 +45,9 @@ pub struct CodeIndexConfig {
 
     #[serde(default)]
     pub locks: LocksConfig,
+
+    #[serde(default)]
+    pub docs: DocsConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -65,8 +68,18 @@ impl Default for CodeIndexConfig {
             intelligence: IntelligenceConfig::default(),
             loop_config: LoopConfig::default(),
             locks: LocksConfig::default(),
+            docs: DocsConfig::default(),
         }
     }
+}
+
+/// Sidecar documentation index (`--docs` / `[docs]`).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DocsConfig {
+    /// Directory of markdown docs relative to repo root (or absolute).
+    /// When set (or overridden by CLI `--docs`), docs tools and sidecar index are enabled.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -548,5 +561,17 @@ allow = ["src", "generated"]
         let cfg = CodeIndexConfig::default();
         assert!(cfg.locks.enabled);
         assert_eq!(cfg.locks.ttl_secs, 600);
+    }
+
+    #[test]
+    fn load_parses_docs_section() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join(".codeindex.toml"),
+            "[docs]\npath = \"ai-docs\"\n",
+        )
+        .unwrap();
+        let cfg = load(tmp.path()).unwrap();
+        assert_eq!(cfg.docs.path.as_deref(), Some("ai-docs"));
     }
 }

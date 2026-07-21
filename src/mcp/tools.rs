@@ -14,6 +14,8 @@ use crate::report;
 use crate::security::{decide, verify_fragment, GateAction, SecurityPolicy};
 use anyhow::{Context, Result};
 
+use crate::mcp::conductor_handlers;
+use crate::mcp::docs_handlers;
 use crate::mcp::intelligence_handlers;
 use crate::mcp::lock_handlers;
 use crate::mcp::loop_handlers;
@@ -34,6 +36,8 @@ pub struct RepoCtx {
     pub intelligence: IntelligenceConfig,
     pub loop_config: LoopConfig,
     pub dict_session: Mutex<DictSession>,
+    /// Absolute docs directory when sidecar docs are enabled.
+    pub docs_root: Option<PathBuf>,
 }
 
 impl RepoCtx {
@@ -144,6 +148,13 @@ pub fn dispatch(ctx: &ToolContext, name: &str, args: &Value) -> Result<Value> {
         "list_done"        => lock_handlers::handle_list_done(ctx, args),
         "session_done"     => lock_handlers::handle_session_done(ctx, args),
         "list_sessions"    => lock_handlers::handle_list_sessions(ctx, args),
+        "spawn_agent"      => conductor_handlers::handle_spawn_agent(ctx, args),
+        "list_agents"      => conductor_handlers::handle_list_agents(ctx, args),
+        "agent_status"     => conductor_handlers::handle_agent_status(ctx, args),
+        "query_docs"       => docs_handlers::handle_query_docs(ctx, args),
+        "resolve_doc"      => docs_handlers::handle_resolve_doc(ctx, args),
+        "docs_status"      => docs_handlers::handle_docs_status(ctx, args),
+        "update_docs"      => docs_handlers::handle_update_docs(ctx, args),
         "read_file" | "write_file" | "edit_file" | "list_directory" => {
             if !ctx.fs_tools {
                 anyhow::bail!(
@@ -195,7 +206,12 @@ pub fn handle_get_context(ctx: &ToolContext, args: &Value) -> Result<Value> {
                 } else {
                     serde_json::to_string_pretty(&index)?
                 };
-                return Ok(text_content(text));
+                let hint = if repo.docs_root.is_some() {
+                    "\n\n# docs enabled — use query_docs / resolve_doc / docs_status when you need documentation context"
+                } else {
+                    ""
+                };
+                return Ok(text_content(format!("{text}{hint}")));
             }
             None => return Ok(text_content(format!(
                 "No index found for repo '{}'.\n\
@@ -672,8 +688,15 @@ pub fn handle_init_workspace(ctx: &ToolContext, args: &Value) -> Result<Value> {
     let mut lines: Vec<String> = vec![];
     for repo in repos {
         tracing::info!("init_workspace: indexing {}", repo.root.display());
-        match crate::indexer::Indexer::new(&repo.root).full_index() {
-            Ok(()) => lines.push(format!("'{}' indexed successfully.", repo.name)),
+        match crate::indexer::Indexer::with_docs(&repo.root, repo.docs_root.as_deref()).full_index() {
+            Ok(()) => {
+                let extra = if repo.docs_root.is_some() {
+                    " (docs sidecar indexed)"
+                } else {
+                    ""
+                };
+                lines.push(format!("'{}' indexed successfully{}.", repo.name, extra));
+            }
             Err(e) => lines.push(format!("'{}' failed: {e}", repo.name)),
         }
     }
@@ -1126,6 +1149,7 @@ mod tests {
             intelligence: IntelligenceConfig::default(),
             loop_config: LoopConfig::default(),
             dict_session: Mutex::new(DictSession::default()),
+            docs_root: None,
         }
     }
 
@@ -1728,5 +1752,63 @@ mod tests {
         assert_eq!(d1.rev, 1);
         let d2 = build_dict_from_packages(&packages, d1.rev);
         assert_eq!(d2.rev, 2);
+    }
+
+    #[test]
+    fn docs_mcp_tools_smoke() {
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("src/auth.rs"), "pub fn login() {}\n").unwrap();
+        fs::write(
+            tmp.path().join("docs/design.md"),
+            "## Auth Flow\n\n<!-- codebeacon: src/auth.rs -->\nJWT.\n",
+        )
+        .unwrap();
+        crate::docs::reindex_docs(tmp.path(), &tmp.path().join("docs"), false).unwrap();
+        crate::docs::mark_stale_for_code_path(tmp.path(), PathBuf::from("src/auth.rs").as_path())
+            .unwrap();
+
+        let mut ctx = single_ctx(&tmp);
+        ctx.repos[0].docs_root = Some(tmp.path().join("docs"));
+
+        let q = dispatch(
+            &ctx,
+            "query_docs",
+            &serde_json::json!({"question": "auth jwt"}),
+        )
+        .unwrap();
+        let qt = q["content"][0]["text"].as_str().unwrap();
+        assert!(qt.contains("Auth"), "query_docs: {qt}");
+
+        let r = dispatch(
+            &ctx,
+            "resolve_doc",
+            &serde_json::json!({"reference": "docs/design.md::## Auth Flow"}),
+        )
+        .unwrap();
+        let rt = r["content"][0]["text"].as_str().unwrap();
+        assert!(rt.contains("JWT"), "resolve_doc: {rt}");
+
+        let s = dispatch(&ctx, "docs_status", &serde_json::json!({})).unwrap();
+        let st = s["content"][0]["text"].as_str().unwrap();
+        assert!(st.contains("stale"), "docs_status: {st}");
+
+        let u = dispatch(&ctx, "update_docs", &serde_json::json!({})).unwrap();
+        let ut = u["content"][0]["text"].as_str().unwrap();
+        assert!(ut.contains("Docs update brief"), "update_docs: {ut}");
+    }
+
+    #[test]
+    fn docs_tools_error_when_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = single_ctx(&tmp);
+        let err = dispatch(
+            &ctx,
+            "query_docs",
+            &serde_json::json!({"question": "x"}),
+        );
+        assert!(err.is_err());
     }
 }

@@ -4,6 +4,7 @@ mod compact;
 mod config;
 mod config_file;
 mod daemon;
+mod docs;
 mod export;
 mod extract;
 mod extractor;
@@ -19,6 +20,7 @@ mod query;
 mod report;
 mod run_plan;
 mod security;
+mod tui;
 mod types;
 mod verify_cmd;
 
@@ -39,6 +41,9 @@ enum Commands {
     Init {
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Directory of markdown docs to index (sidecar `.codeindex/docs.json`)
+        #[arg(long)]
+        docs: Option<PathBuf>,
     },
     /// Start daemon + MCP server
     Serve {
@@ -51,6 +56,9 @@ enum Commands {
         /// Disable multi-agent path lock MCP tools
         #[arg(long)]
         no_locks: bool,
+        /// Directory of markdown docs to index and expose via MCP docs tools
+        #[arg(long)]
+        docs: Option<PathBuf>,
     },
     /// Run all plan markdown docs in a directory with parallel agents
     RunPlan {
@@ -71,6 +79,24 @@ enum Commands {
         provider: String,
         #[arg(long)]
         dry_run: bool,
+        /// Legacy inherit-stdout waves (no TUI) — for CI
+        #[arg(long)]
+        headless: bool,
+    },
+    /// Interactive multi-agent TUI session (create/close panes)
+    MultiAgent {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value = "")]
+        model: String,
+        /// Agent provider: cursor | claude | codex
+        #[arg(long, default_value = "cursor")]
+        provider: String,
+        #[arg(long)]
+        dry_run: bool,
+        /// Session mode: gallery | conductor (skips startup picker)
+        #[arg(long)]
+        mode: Option<String>,
     },
     /// Verify a code fragment against the security policy (CWE checks)
     Verify {
@@ -196,6 +222,11 @@ enum Commands {
         #[command(subcommand)]
         command: HookCommands,
     },
+    /// Sidecar documentation index (requires --docs or [docs] path)
+    Docs {
+        #[command(subcommand)]
+        command: DocsCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -263,6 +294,33 @@ enum LoopCommands {
 }
 
 #[derive(Subcommand)]
+enum DocsCommands {
+    /// Keyword search over indexed doc sections
+    Query {
+        question: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        docs: Option<PathBuf>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Resolve a doc anchor (e.g. docs/a.md::## Auth)
+    Resolve {
+        reference: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Show stale / broken doc links
+    Status {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        docs: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ExportCommands {
     /// Export dependency graph as Mermaid diagram
     Mermaid {
@@ -299,17 +357,30 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { root } => {
+        Commands::Init { root, docs } => {
             let repos = resolve_roots(root)?;
             for repo in &repos {
                 tracing::info!("Indexing repo: {}", repo.display());
-                let mut indexer = indexer::Indexer::new(repo);
+                let mut indexer = indexer::Indexer::with_docs(repo, docs.as_deref());
                 indexer.full_index()?;
-                println!("Index written to {}/.codeindex/", repo.display());
+                if indexer.docs_root.is_some() {
+                    println!(
+                        "Index + docs written to {}/.codeindex/",
+                        repo.display()
+                    );
+                } else {
+                    println!("Index written to {}/.codeindex/", repo.display());
+                }
             }
         }
-        Commands::Serve { root, fs_tools, security, no_locks } => {
-            mcp::run_stdio_server(root, fs_tools, security, no_locks)?;
+        Commands::Serve {
+            root,
+            fs_tools,
+            security,
+            no_locks,
+            docs,
+        } => {
+            mcp::run_stdio_server(root, fs_tools, security, no_locks, docs)?;
         }
         Commands::RunPlan {
             plans_dir,
@@ -319,6 +390,7 @@ async fn main() -> Result<()> {
             model,
             provider,
             dry_run,
+            headless,
         } => {
             let workspace = run_plan::resolve_workspace(root.as_deref());
             let cfg = config_file::load(&workspace).unwrap_or_default();
@@ -331,6 +403,46 @@ async fn main() -> Result<()> {
                 provider: run_plan::RunPlanProvider::parse(&provider)?,
                 dry_run,
                 ttl_secs: cfg.locks.ttl_secs,
+                headless,
+            })?;
+        }
+        Commands::MultiAgent {
+            root,
+            model,
+            provider,
+            dry_run,
+            mode,
+        } => {
+            let workspace = run_plan::resolve_workspace(root.as_deref());
+            let cfg = config_file::load(&workspace).unwrap_or_default();
+            let locks_path =
+                locks::reset_stable_locks(&workspace).map_err(|e| anyhow::anyhow!(e))?;
+            let store = locks::SharedLockStore::open(locks_path, cfg.locks.ttl_secs, vec![]);
+            let mode_from_cli = mode.is_some();
+            let session_mode = match mode {
+                Some(m) => tui::SessionMode::parse(&m)?,
+                None => tui::SessionMode::Gallery,
+            };
+            let mcp_config = if provider == "claude" || provider.starts_with("cli:claude") {
+                let dir = tui::empty_session_dir(&workspace);
+                let cfg_path = dir.join("mcp.json");
+                run_plan::write_claude_mcp_config(&cfg_path, &workspace)?;
+                Some(cfg_path)
+            } else {
+                None
+            };
+            tui::run_session(tui::SessionOpts {
+                workspace,
+                provider: run_plan::RunPlanProvider::parse(&provider)?,
+                model,
+                parallel: 8,
+                dry_run,
+                mcp_config,
+                store,
+                allow_new: true,
+                mode: session_mode,
+                mode_from_cli,
+                jobs: vec![],
             })?;
         }
         Commands::Verify {
@@ -523,6 +635,98 @@ async fn main() -> Result<()> {
             HookCommands::Uninstall { root } => {
                 let opts = hook::HookOptions::resolve(root)?;
                 hook::uninstall(&opts)?;
+            }
+        },
+        Commands::Docs { command } => match command {
+            DocsCommands::Query {
+                question,
+                root,
+                docs,
+                limit,
+            } => {
+                let repos = resolve_roots(root)?;
+                let repo = &repos[0];
+                let cfg = config_file::load(repo).unwrap_or_default();
+                let docs_root = docs::index::resolve_docs_root(
+                    repo,
+                    docs.as_deref(),
+                    cfg.docs.path.as_deref(),
+                );
+                if docs_root.is_none() {
+                    anyhow::bail!(
+                        "docs not enabled — pass --docs or set [docs] path in .codeindex.toml"
+                    );
+                }
+                let codeindex = config::codeindex_dir(repo);
+                let idx = docs::load_docs_index(&codeindex)?
+                    .context("no docs index — run `codebeacon init --docs …` first")?;
+                let hits = docs::query_docs(&idx, &question, limit);
+                if hits.is_empty() {
+                    println!("(no matches)");
+                } else {
+                    for h in hits {
+                        println!(
+                            "{:.2}  {}{}\n    {}",
+                            h.score,
+                            h.id,
+                            if h.stale { " [stale]" } else { "" },
+                            h.snippet
+                        );
+                    }
+                }
+            }
+            DocsCommands::Resolve { reference, root } => {
+                let repos = resolve_roots(root)?;
+                let repo = &repos[0];
+                let r = docs::parse_reference(&reference);
+                match docs::resolve(repo, &r) {
+                    Ok(slice) => {
+                        println!(
+                            "--- {} (lines {}-{}) ---\n{}",
+                            slice.label, slice.start_line, slice.end_line, slice.content
+                        );
+                    }
+                    Err(e) => anyhow::bail!("{e}"),
+                }
+            }
+            DocsCommands::Status { root, docs } => {
+                let repos = resolve_roots(root)?;
+                let repo = &repos[0];
+                let cfg = config_file::load(repo).unwrap_or_default();
+                let _docs_root = docs::index::resolve_docs_root(
+                    repo,
+                    docs.as_deref(),
+                    cfg.docs.path.as_deref(),
+                )
+                .context("docs not enabled — pass --docs or set [docs] path")?;
+                let codeindex = config::codeindex_dir(repo);
+                let idx = docs::load_docs_index(&codeindex)?
+                    .context("no docs index — run `codebeacon init --docs …` first")?;
+                let stale: Vec<_> = idx.sections.iter().filter(|s| s.stale).collect();
+                let broken: Vec<_> = idx
+                    .sections
+                    .iter()
+                    .flat_map(|s| {
+                        s.links
+                            .iter()
+                            .filter(|l| l.broken)
+                            .map(move |l| format!("{} -> {}", s.id, l.target))
+                    })
+                    .collect();
+                println!(
+                    "docs_root={} files={} sections={}",
+                    idx.docs_root,
+                    idx.files.len(),
+                    idx.sections.len()
+                );
+                println!("stale: {}", stale.len());
+                for s in &stale {
+                    println!("  {}", s.id);
+                }
+                println!("broken links: {}", broken.len());
+                for b in &broken {
+                    println!("  {b}");
+                }
             }
         },
     }
@@ -764,7 +968,7 @@ mod tests {
         for name in [
             "init", "serve", "verify", "install", "report", "query", "path",
             "explain", "dependents", "focus", "status", "impact", "api", "why", "loop",
-            "run-plan", "export", "hook",
+            "run-plan", "multi-agent", "export", "hook", "docs",
         ] {
             assert!(
                 cmd.get_subcommands().any(|s| s.get_name() == name),

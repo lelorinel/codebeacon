@@ -51,7 +51,9 @@ CLI: `codebeacon serve --no-locks` hides the tools.
 
 ## `codebeacon run-plan`
 
-Run every `*.md` in a plans directory with parallel Cursor/Claude agents:
+Run every `*.md` in a plans directory with parallel Cursor/Claude/Codex agents.
+
+**Default UI is a multi-agent TUI** (sidebar + focused PTY). Use `--headless` for CI / inherit-stdout waves.
 
 ```bash
 codebeacon run-plan ./plans "Implement these plans against the current codebase"
@@ -59,22 +61,63 @@ codebeacon run-plan ./plans "…" --parallel 2 --model composer-2.5
 codebeacon run-plan ./plans "…" --provider claude
 codebeacon run-plan ./plans "…" --provider codex --model o4-mini
 codebeacon run-plan ./plans "…" --dry-run
+codebeacon run-plan ./plans "…" --headless   # no TUI
 ```
+
+### TUI keys
+
+| Mode | Keys |
+|------|------|
+| **Nav** | `j`/`k` or ↑↓ select · Enter attach · `x` close pane · `p` re-prompt · `Q` quit (twice) |
+| **Attach** | All keys → agent (Esc/Ctrl+C/Ctrl+J/… pass through) · **`Ctrl+]`** detach only |
+
+Sidebar marks: spinner = working · **`?`** = waiting for your input (permission / question) · `✓` = done · `♪` = conductor.
+
+Done agents stay in the sidebar with ✓ until you press `x`. Closing a pane frees a slot for the next queued plan.
+
+### `codebeacon multi-agent`
+
+Interactive session — on open, pick **Gallery** or **Conductor** (or pass `--mode`):
+
+```bash
+codebeacon multi-agent
+codebeacon multi-agent --mode gallery
+codebeacon multi-agent --mode conductor --provider claude
+```
+
+| Mode | Behavior |
+|------|----------|
+| **Gallery** | Equal panes; `n` creates agents; attach to any pane |
+| **Conductor** | First agent is the **conductor** (`♪`); input only to conductor; ensemble panes are view-only; conductor spawns workers via MCP `spawn_agent` |
+
+Conductor session files live under `.codeindex/multi-agent/<session_id>/` (`meta.json`, `queue.json`, `agents.json`).
 
 | Provider | Binary / env | Notes |
 |----------|--------------|-------|
 | `cursor` (default) | `agent` / `CURSOR_AGENT` | `--force --approve-mcps` |
-| `claude` | `claude` / `CLAUDE_BIN` | `--print` + `--permission-mode bypassPermissions`; injects run-scoped `--mcp-config` for codebeacon |
-| `codex` | `codex` / `CODEX_BIN` | `codex exec --full-auto --sandbox workspace-write` |
+| `claude` | `claude` / `CLAUDE_BIN` | TUI: interactive; headless: `--print` + bypassPermissions; injects run-scoped `--mcp-config` (with `CODEBEACON_MA_*` env in conductor mode) |
+| `codex` | `codex` / `CODEX_BIN` | TUI: interactive; headless: `codex exec --full-auto` |
 
 Install MCP/skills first for the target platform: `codebeacon install --platform cursor|claude|codex --project`.
 
-Flow:
+#### Conductor MCP tools
+
+When an active conductor session is present (ACTIVE file / `CODEBEACON_MA_SESSION`):
+
+| Tool | Who | Action |
+|------|-----|--------|
+| `spawn_agent` | conductor | Enqueue ensemble prompt → TUI opens pane |
+| `list_agents` | all | List conductor + ensemble |
+| `agent_status` | all | One agent by `block_key` |
+
+Ensemble members with `CODEBEACON_MA_ROLE=ensemble` cannot call `spawn_agent`.
+
+Flow for `run-plan`:
 
 1. Discover flat `*.md` under the plans dir
 2. Reset lock store; register a session per plan stem
 3. Write briefs under `.codeindex/run-plan/<run_id>/`
-4. Spawn agents in waves (`--parallel 0` = all at once)
+4. Open TUI (or headless waves with `--parallel`)
 5. Barrier on `session_done` or signal file `touch` + `CBDONE <block_key>`
 
 Agent binary: `CURSOR_AGENT` env or `agent` on PATH (Cursor). Claude uses `claude` on PATH.

@@ -51,6 +51,9 @@ enabled = true
 ttl_secs = 600
 # allow = ["src"]              # empty = any relative path under workspace
 
+[docs]
+path = "docs"                  # or: codebeacon init/serve --docs ./docs
+
 [security]
 enabled = false            # or: codebeacon serve --security
 mode = "balanced"          # strict | balanced | permissive
@@ -123,6 +126,14 @@ Per-call override: pass `"compact": false` on any MCP tool. See [BENCHMARKS.md](
 | `allow` | `[]` | Optional path prefixes; empty accepts any relative path (no `..`) |
 
 See [LOCKS.md](LOCKS.md).
+
+## `[docs]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `path` | unset | Markdown docs directory (relative to repo root or absolute). Enables sidecar `.codeindex/docs.json` and MCP docs tools. CLI `--docs` overrides. |
+
+Link code from a section with `<!-- codebeacon: src/foo.rs -->`. Hybrid update: code changes mark linked sections stale; `update_docs` returns a brief (agent writes MD).
 
 ## `[security]`
 

@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Docs sidecar
+
+- **`--docs <path>`** on `init` / `serve`, plus `[docs] path` in `.codeindex.toml`.
+- Sidecar index **`.codeindex/docs.json`** — markdown headings, explicit `<!-- codebeacon: path -->` links, heuristic path/symbol links.
+- **MCP tools** (when docs enabled) — `query_docs`, `resolve_doc`, `docs_status`, `update_docs` (brief only; agent writes MD).
+- **CLI** — `codebeacon docs query|resolve|status`.
+- **Anchor resolve** — `path`, `path::## Heading`, `path::Symbol`, `path#N-M` (ported independently from veld-anchor).
+- **Stale tracking** — code changes mark linked sections; daemon reindexes docs on `.md` edits.
+- **Docs** — [CONFIG.md](docs/CONFIG.md#docs), [mcp-tools.md](assets/skill/references/mcp-tools.md).
+
+#### Multi-agent TUI
+
+- **`run-plan` defaults to a TUI** — left sidebar (✓ / spinner), focused agent PTY (`ratatui` + `portable-pty` + `vt100`), bottom re-prompt bar.
+- **`--headless`** — previous inherit-stdout wave behavior for CI.
+- **`codebeacon multi-agent`** — empty interactive session; `n` create pane, `x` close, `p` re-prompt.
+- **Gallery / Conductor modes** — startup picker or `--mode gallery|conductor`. Conductor: lead agent (`♪`) only receives input; ensemble is view-only; MCP `spawn_agent` / `list_agents` / `agent_status`.
+- **Keybindings** — Nav: `j`/`k` or ↑↓, Enter attach, `Q` quit; Attach: pass-through to Cursor/Claude/Codex except **`Ctrl+]`** detach.
+- **Sidebar `?`** — when an agent is waiting for input (permission prompt / question), detected from PTY screen heuristics (Cursor / Claude / Codex).
+- Done panes stay open until the user closes them; closing frees a slot for queued plans.
+- **Docs** — [LOCKS.md](docs/LOCKS.md) TUI keys + multi-agent.
+
+### Changed
+
+- **README** — docs sidecar, TUI / `multi-agent` / `--headless` examples.
+- **`run-plan` spawn** — shared `build_agent_argv` for headless vs interactive PTY (Claude omits `--print` in TUI; Codex interactive vs `exec`).
+
 ## [0.6.0] - 2026-07-18
 
 ### Added

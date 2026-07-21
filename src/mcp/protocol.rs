@@ -64,6 +64,8 @@ pub fn tool_list(
     intelligence: bool,
     loop_enabled: bool,
     locks_enabled: bool,
+    docs_enabled: bool,
+    conductor_enabled: bool,
 ) -> Value {
     let mut tools = vec![
         serde_json::json!({
@@ -565,6 +567,97 @@ pub fn tool_list(
         ]);
     }
 
+    if docs_enabled {
+        tools.extend([
+            serde_json::json!({
+                "name": "query_docs",
+                "description": "Keyword search over indexed markdown docs (headings + snippets). Use when documentation context is needed.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string" },
+                        "limit": { "type": "integer", "description": "Max results (default 10)" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["question"]
+                }
+            }),
+            serde_json::json!({
+                "name": "resolve_doc",
+                "description": "Resolve a docs anchor to a content slice. Syntax: path | path::## Heading | path::Symbol | path#N-M",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "reference": { "type": "string", "description": "e.g. docs/design.md::## Auth Flow" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["reference"]
+                }
+            }),
+            serde_json::json!({
+                "name": "docs_status",
+                "description": "List stale documentation sections and broken codebeacon links.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "update_docs",
+                "description": "Build an update brief for stale (or a specific) doc section. Does not write markdown — the agent applies the brief.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "section": { "type": "string", "description": "Section id or substring; omit for all stale sections" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+        ]);
+    }
+
+    if conductor_enabled {
+        tools.extend([
+            serde_json::json!({
+                "name": "spawn_agent",
+                "description": "Conductor only: enqueue an ensemble agent. The multi-agent TUI polls and opens a new pane.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "Task for the ensemble member" },
+                        "block_key": { "type": "string", "description": "Optional id for the new ensemble agent" },
+                        "model": { "type": "string", "description": "Optional model override" }
+                    },
+                    "required": ["prompt"]
+                }
+            }),
+            serde_json::json!({
+                "name": "list_agents",
+                "description": "List conductor + ensemble agents in the active multi-agent session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "agent_status",
+                "description": "Status of one ensemble (or conductor) agent by block_key.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "block_key": { "type": "string" }
+                    },
+                    "required": ["block_key"]
+                }
+            }),
+        ]);
+    }
+
     serde_json::json!({ "tools": tools })
 }
 
@@ -606,7 +699,7 @@ mod tests {
 
     #[test]
     fn tool_list_includes_locks_when_enabled() {
-        let v = tool_list(false, false, false, false, true);
+        let v = tool_list(false, false, false, false, true, false, false);
         let names: Vec<&str> = v["tools"]
             .as_array()
             .unwrap()
@@ -615,7 +708,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"claim_path"));
         assert!(names.contains(&"session_done"));
-        let v2 = tool_list(false, false, false, false, false);
+        let v2 = tool_list(false, false, false, false, false, false, false);
         let names2: Vec<&str> = v2["tools"]
             .as_array()
             .unwrap()
@@ -623,5 +716,34 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         assert!(!names2.contains(&"claim_path"));
+    }
+
+    #[test]
+    fn tool_list_includes_docs_when_enabled() {
+        let v = tool_list(false, false, false, false, false, true, false);
+        let names: Vec<&str> = v["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"query_docs"));
+        assert!(names.contains(&"resolve_doc"));
+        assert!(names.contains(&"docs_status"));
+        assert!(names.contains(&"update_docs"));
+    }
+
+    #[test]
+    fn tool_list_includes_conductor_when_enabled() {
+        let v = tool_list(false, false, false, false, false, false, true);
+        let names: Vec<&str> = v["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"spawn_agent"));
+        assert!(names.contains(&"list_agents"));
+        assert!(names.contains(&"agent_status"));
     }
 }

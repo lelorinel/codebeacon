@@ -2,7 +2,7 @@
 
 mod brief;
 mod discover;
-mod spawn;
+pub(crate) mod spawn;
 
 use crate::locks::{reset_stable_locks, SharedLockStore};
 use anyhow::{bail, Context, Result};
@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use discover::{discover_plans, PlanDoc};
-pub use spawn::{resolve_agent_bin, RunPlanProvider};
+pub use spawn::{
+    build_agent_argv, mission_prompt, resolve_agent_bin, write_claude_mcp_config, write_mcp_config,
+    AgentArgvOpts, RunPlanProvider,
+};
 
 #[derive(Debug, Clone)]
 pub struct RunPlanOpts {
@@ -22,6 +25,8 @@ pub struct RunPlanOpts {
     pub provider: RunPlanProvider,
     pub dry_run: bool,
     pub ttl_secs: u64,
+    /// When true, use legacy inherit-stdout waves (no TUI).
+    pub headless: bool,
 }
 
 pub fn run(opts: RunPlanOpts) -> Result<()> {
@@ -72,7 +77,7 @@ pub fn run(opts: RunPlanOpts) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     println!(
-        "[codebeacon] run-plan: {} plan(s), provider={}, parallel={}, dry_run={}, run={}",
+        "[codebeacon] run-plan: {} plan(s), provider={}, parallel={}, dry_run={}, headless={}, run={}",
         briefs.len(),
         opts.provider.as_str(),
         if opts.parallel == 0 {
@@ -81,6 +86,7 @@ pub fn run(opts: RunPlanOpts) -> Result<()> {
             opts.parallel.to_string()
         },
         opts.dry_run,
+        opts.headless,
         run_id
     );
 
@@ -91,6 +97,23 @@ pub fn run(opts: RunPlanOpts) -> Result<()> {
     } else {
         None
     };
+
+    if !opts.headless {
+        let jobs = crate::tui::jobs_from_briefs(&briefs);
+        return crate::tui::run_session(crate::tui::SessionOpts {
+            workspace: opts.workspace.clone(),
+            provider: opts.provider,
+            model: opts.model.clone(),
+            parallel: opts.parallel,
+            dry_run: opts.dry_run,
+            mcp_config,
+            store,
+            allow_new: false,
+            mode: crate::tui::SessionMode::Gallery,
+            mode_from_cli: true,
+            jobs,
+        });
+    }
 
     let wave = if opts.parallel == 0 {
         briefs.len().max(1)
