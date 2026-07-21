@@ -399,6 +399,105 @@ pub fn load(repo_root: &Path) -> Result<CodeIndexConfig> {
     Ok(cfg)
 }
 
+/// Path string to store in `[docs] path` (prefer relative to repo root).
+pub fn docs_path_for_config(repo_root: &Path, cli_docs: &Path) -> String {
+    if cli_docs.is_absolute() {
+        if let Ok(rel) = cli_docs.strip_prefix(repo_root) {
+            let s = rel.display().to_string();
+            return if s.is_empty() { ".".into() } else { s };
+        }
+        return cli_docs.display().to_string();
+    }
+    let s = cli_docs.to_string_lossy();
+    let trimmed = s.trim_start_matches("./");
+    if trimmed.is_empty() {
+        ".".into()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn escape_toml_basic(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Insert or update `[docs] path` in an existing TOML text (preserves other content).
+pub fn upsert_docs_path_toml(existing: &str, path_value: &str) -> String {
+    let assignment = format!("path = \"{}\"", escape_toml_basic(path_value));
+    let lines: Vec<&str> = existing.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut found_docs = false;
+    let mut wrote_path = false;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+        if trimmed == "[docs]" || trimmed.starts_with("[docs.") {
+            found_docs = true;
+            out.push(line.to_string());
+            i += 1;
+            // Copy/replace within this table until next [section]
+            while i < lines.len() {
+                let l = lines[i];
+                let t = l.trim();
+                if t.starts_with('[') && !t.starts_with("[[") {
+                    break;
+                }
+                if t.starts_with("path ") || t.starts_with("path=") {
+                    if !wrote_path {
+                        out.push(assignment.clone());
+                        wrote_path = true;
+                    }
+                    // skip old path line
+                } else {
+                    out.push(l.to_string());
+                }
+                i += 1;
+            }
+            if !wrote_path {
+                out.push(assignment.clone());
+                wrote_path = true;
+            }
+            continue;
+        }
+        out.push(line.to_string());
+        i += 1;
+    }
+
+    if !found_docs {
+        if !out.is_empty() && !out.last().map(|s| s.is_empty()).unwrap_or(true) {
+            out.push(String::new());
+        }
+        out.push("[docs]".into());
+        out.push(assignment);
+    }
+
+    let mut s = out.join("\n");
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
+
+/// Persist `[docs] path` into `.codeindex.toml` (create file if missing).
+pub fn persist_docs_path(repo_root: &Path, cli_docs: &Path) -> Result<()> {
+    let path_value = docs_path_for_config(repo_root, cli_docs);
+    let config_path = repo_root.join(".codeindex.toml");
+    if !config_path.exists() {
+        let body = format!(
+            "# Written by `codebeacon init --docs`\n\n[docs]\npath = \"{}\"\n",
+            escape_toml_basic(&path_value)
+        );
+        std::fs::write(&config_path, body)?;
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&config_path)?;
+    let updated = upsert_docs_path_toml(&text, &path_value);
+    std::fs::write(&config_path, updated)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +672,50 @@ allow = ["src", "generated"]
         .unwrap();
         let cfg = load(tmp.path()).unwrap();
         assert_eq!(cfg.docs.path.as_deref(), Some("ai-docs"));
+    }
+
+    #[test]
+    fn persist_docs_creates_toml() {
+        let tmp = TempDir::new().unwrap();
+        persist_docs_path(tmp.path(), Path::new("../")).unwrap();
+        let text = fs::read_to_string(tmp.path().join(".codeindex.toml")).unwrap();
+        assert!(text.contains("[docs]"));
+        assert!(text.contains("path = \"../\""));
+        let cfg = load(tmp.path()).unwrap();
+        assert_eq!(cfg.docs.path.as_deref(), Some("../"));
+    }
+
+    #[test]
+    fn upsert_docs_preserves_other_sections() {
+        let existing = "extra_ignore_dirs = [\"tmp\"]\n\n[compact]\nenabled = false\n";
+        let out = upsert_docs_path_toml(existing, "docs");
+        assert!(out.contains("extra_ignore_dirs"));
+        assert!(out.contains("[compact]"));
+        assert!(out.contains("enabled = false"));
+        assert!(out.contains("[docs]"));
+        assert!(out.contains("path = \"docs\""));
+    }
+
+    #[test]
+    fn upsert_docs_updates_existing_path() {
+        let existing = "[docs]\npath = \"old\"\n\n[locks]\nenabled = true\n";
+        let out = upsert_docs_path_toml(existing, "../handbook");
+        assert!(out.contains("path = \"../handbook\""));
+        assert!(!out.contains("path = \"old\""));
+        assert!(out.contains("[locks]"));
+        let cfg: CodeIndexConfig = toml::from_str(&out).unwrap();
+        assert_eq!(cfg.docs.path.as_deref(), Some("../handbook"));
+    }
+
+    #[test]
+    fn docs_path_for_config_strips_dot_slash() {
+        assert_eq!(
+            docs_path_for_config(Path::new("/repo"), Path::new("./docs")),
+            "docs"
+        );
+        assert_eq!(
+            docs_path_for_config(Path::new("/repo"), Path::new("../")),
+            "../"
+        );
     }
 }

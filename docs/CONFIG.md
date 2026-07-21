@@ -131,7 +131,7 @@ See [LOCKS.md](LOCKS.md).
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `path` | unset | Markdown docs directory (relative to repo root or absolute). Enables sidecar `.codeindex/docs.json` and MCP docs tools. CLI `--docs` overrides. |
+| `path` | unset | Markdown docs directory (relative to repo root or absolute). Enables sidecar `.codeindex/docs.json` and MCP docs tools. CLI `--docs` overrides. **`codebeacon init --docs <path>` writes this field** (creates `.codeindex.toml` if missing). |
 
 Link code from a section with `<!-- codebeacon: src/foo.rs -->`. Hybrid update: code changes mark linked sections stale; `update_docs` returns a brief (agent writes MD).
 

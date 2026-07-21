@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-21
+
+### Changed
+
+- **`init --docs`** — persists `[docs] path` into `.codeindex.toml` (creates the file if needed) so MCP `serve` picks up docs without repeating `--docs`.
+
 ## [0.7.0] - 2026-07-21
 
 ### Added

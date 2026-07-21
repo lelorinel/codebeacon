@@ -363,9 +363,15 @@ async fn main() -> Result<()> {
                 tracing::info!("Indexing repo: {}", repo.display());
                 let mut indexer = indexer::Indexer::with_docs(repo, docs.as_deref());
                 indexer.full_index()?;
-                if indexer.docs_root.is_some() {
+                if let Some(docs_path) = docs.as_deref() {
+                    config_file::persist_docs_path(repo, docs_path)?;
                     println!(
                         "Index + docs written to {}/.codeindex/",
+                        repo.display()
+                    );
+                    println!(
+                        "Wrote [docs] path = {:?} to {}/.codeindex.toml",
+                        config_file::docs_path_for_config(repo, docs_path),
                         repo.display()
                     );
                 } else {
