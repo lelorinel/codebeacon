@@ -6,11 +6,15 @@ alwaysApply: true
 
 Use the `codebeacon` MCP tools for code navigation and context:
 
-- `get_context` — start here for any exploration
+- `get_context` — start here for any exploration (not grep/Read/Glob first)
+- `query_context` / `navigate_to_feature` — BM25 / NL search across the index
 - `find_definition` / `find_references` — jump to symbols (LSP-backed)
 - `drill_package` — dig into a specific package
-- `get_dependents` — find what uses a file (impact analysis)
-- `query_context` / `shortest_path` / `hotspots` — graph queries
+- `focus_context` / `index_status` — edit-time subgraph and freshness
+- `change_impact` / `call_graph` / `get_dependents` — blast radius before edits
+- `review_bundle` — PR/commit diff → affected symbols + impact
+- `predict_risk` / `fragile_files` / `test_gaps` / `arch_check` / `dep_freshness` — risk, tests, architecture, deps
+- `shortest_path` / `hotspots` — graph queries
 
 Prefer these over `Read`/`grep` for navigating this codebase.
 

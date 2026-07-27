@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-27
+
+### Changed
+
+- **Agent skill / Cursor rule** — `SKILL.md` and `codebeacon.mdc` document BM25 search, call graph, navigate, review, risk, test gaps, arch check, and dep freshness so installed Cursor/Claude/Codex agents know the new tools.
+
 ## [0.8.1] - 2026-07-27
 
 ### Fixed
