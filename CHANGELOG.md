@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-27
+
+### Added
+
+#### Search & navigation
+
+- **BM25 ranking** — camelCase / snake_case tokenization + light stemming; persists `.codeindex/search.bin` on index rebuild. `query_context` / `task_context` / CLI `query` use BM25 + graph proximity (no embeddings required).
+- **`navigate_to_feature`** — NL → ranked files/symbols, suggested read order, related docs, dependency paths. CLI: `codebeacon navigate`.
+- **`semantic_search`** — optional Cargo feature `embeddings` (char n-gram vectors); without the feature, falls back to BM25.
+
+#### Call graph & impact
+
+- **Call graph** — regex call-site extraction → `.codeindex/calls.bin`. MCP/CLI `call_graph` (`callers` / `callees` / `both`).
+- **`change_impact`** — adds `affected_functions` and `call_fan_in`; risk tier considers call fan-in.
+
+#### Review, architecture, tests, risk, deps
+
+- **`review_bundle`** — diff-aware context from `--pr` (gh), `--base`, or `--commit`. CLI: `codebeacon review`.
+- **`arch_check`** — layer/package allow/deny rules via `[architecture]` in `.codeindex.toml`. CLI: `codebeacon arch-check`.
+- **`test_gaps`** — prod functions without a matching test name. CLI: `codebeacon test-gaps`.
+- **`predict_risk`** — configurable logistic score (`[risk]` weights: dependents, fan-in, churn, bug-fix commits, complexity, test gaps). `fragile_files` uses the same scorer when risk is enabled. CLI: `codebeacon predict-risk`.
+- **`dep_freshness`** — Cargo.toml / package.json / go.mod drift (optional `[deps] check_registry` for crates.io). CLI: `codebeacon dep-freshness`.
+
+#### Docs
+
+- [CONFIG.md](docs/CONFIG.md) — `[architecture]`, `[risk]`, `[deps]`, `call_graph`.
+- [ROADMAP.md](docs/ROADMAP.md) — v0.8 intelligence upgrades marked done.
+- Skill [mcp-tools.md](assets/skill/references/mcp-tools.md) — new tools listed.
+
 ## [0.7.2] - 2026-07-21
 
 ### Fixed

@@ -48,6 +48,15 @@ pub struct CodeIndexConfig {
 
     #[serde(default)]
     pub docs: DocsConfig,
+
+    #[serde(default)]
+    pub architecture: ArchitectureConfig,
+
+    #[serde(default)]
+    pub risk: RiskConfig,
+
+    #[serde(default)]
+    pub deps: DepsConfig,
 }
 
 fn default_lsp_concurrency() -> usize { 2 }
@@ -69,6 +78,9 @@ impl Default for CodeIndexConfig {
             loop_config: LoopConfig::default(),
             locks: LocksConfig::default(),
             docs: DocsConfig::default(),
+            architecture: ArchitectureConfig::default(),
+            risk: RiskConfig::default(),
+            deps: DepsConfig::default(),
         }
     }
 }
@@ -80,6 +92,103 @@ pub struct DocsConfig {
     /// When set (or overridden by CLI `--docs`), docs tools and sidecar index are enabled.
     #[serde(default)]
     pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ArchitectureConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub layers: Vec<String>,
+    #[serde(default)]
+    pub map: Vec<ArchMap>,
+    #[serde(default)]
+    pub allow: Vec<ArchAllow>,
+    #[serde(default)]
+    pub deny: Vec<ArchDeny>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ArchMap {
+    pub layer: String,
+    #[serde(default)]
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ArchAllow {
+    pub from: String,
+    #[serde(default)]
+    pub to: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ArchDeny {
+    pub from: String,
+    #[serde(default)]
+    pub to: Vec<String>,
+}
+
+/// Logistic risk weights: score = σ(w·x + b).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RiskConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_w_dependents")]
+    pub w_dependents: f32,
+    #[serde(default = "default_w_fan_in")]
+    pub w_fan_in: f32,
+    #[serde(default = "default_w_churn")]
+    pub w_churn: f32,
+    #[serde(default = "default_w_bugfix")]
+    pub w_bugfix: f32,
+    #[serde(default = "default_w_complexity")]
+    pub w_complexity: f32,
+    #[serde(default = "default_w_test_gap")]
+    pub w_test_gap: f32,
+    #[serde(default = "default_risk_bias")]
+    pub bias: f32,
+}
+
+fn default_w_dependents() -> f32 { 0.15 }
+fn default_w_fan_in() -> f32 { 0.2 }
+fn default_w_churn() -> f32 { 0.1 }
+fn default_w_bugfix() -> f32 { 0.25 }
+fn default_w_complexity() -> f32 { 0.05 }
+fn default_w_test_gap() -> f32 { 0.2 }
+fn default_risk_bias() -> f32 { -2.0 }
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            w_dependents: default_w_dependents(),
+            w_fan_in: default_w_fan_in(),
+            w_churn: default_w_churn(),
+            w_bugfix: default_w_bugfix(),
+            w_complexity: default_w_complexity(),
+            w_test_gap: default_w_test_gap(),
+            bias: default_risk_bias(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DepsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// When true, query crates.io / npm registries (network).
+    #[serde(default)]
+    pub check_registry: bool,
+}
+
+impl Default for DepsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            check_registry: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -224,6 +333,8 @@ pub struct IntelligenceConfig {
     pub conventions_enabled: bool,
     #[serde(default = "default_true")]
     pub git_context_enabled: bool,
+    #[serde(default = "default_true")]
+    pub call_graph: bool,
 }
 
 fn default_intelligence_enabled() -> bool {
@@ -250,6 +361,7 @@ impl Default for IntelligenceConfig {
             change_impact_high_ref_threshold: default_impact_threshold(),
             conventions_enabled: default_true(),
             git_context_enabled: default_true(),
+            call_graph: default_true(),
         }
     }
 }

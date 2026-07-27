@@ -117,3 +117,47 @@ pub fn git_churn(repo_root: &Path, files: &[String], limit: usize) -> Result<Vec
 pub fn is_git_repo(repo_root: &Path) -> bool {
     repo_root.join(".git").exists()
 }
+
+/// Fraction of recent commits for a file whose messages look like bug fixes.
+pub fn git_bugfix_ratio(repo_root: &Path, rel_file: &str) -> Option<f32> {
+    let out = Command::new("git")
+        .args([
+            "-C",
+            &repo_root.to_string_lossy(),
+            "log",
+            "-30",
+            "--format=%s",
+            "--",
+            rel_file,
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    if lines.is_empty() {
+        return Some(0.0);
+    }
+    let bug_re = regex::Regex::new(r"(?i)\b(fix|bug|cve|hotfix|regress)\b").ok()?;
+    let bugs = lines.iter().filter(|l| bug_re.is_match(l)).count();
+    Some(bugs as f32 / lines.len() as f32)
+}
+
+/// Unified diff text for review tooling.
+pub fn git_diff_range(repo_root: &Path, range: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", &repo_root.to_string_lossy(), "diff", "-U0", range])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        None
+    }
+}
+

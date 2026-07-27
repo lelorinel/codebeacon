@@ -1,6 +1,6 @@
 [package]
 name = "codebeacon"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 description = "Hierarchical code index for AI coding assistants — LSP-backed, MCP-served"
 license = "AGPL-3.0"
@@ -71,6 +71,7 @@ tree-sitter-c-sharp = { version = "0.23", optional = true }
 [features]
 default = []
 security-z3 = ["dep:z3"]
+embeddings = []
 tree-sitter = [
   "dep:tree-sitter",
   "dep:tree-sitter-rust",

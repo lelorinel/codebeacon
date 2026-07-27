@@ -2,6 +2,7 @@ pub mod compact;
 pub mod config;
 pub mod config_file;
 pub mod daemon;
+pub mod deps;
 pub mod docs;
 pub mod export;
 pub mod extract;

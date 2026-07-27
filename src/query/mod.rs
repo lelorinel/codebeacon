@@ -1,10 +1,15 @@
-//! Shared query logic for CLI and MCP (no LLM — term overlap + graph proximity).
+//! Shared query logic for CLI and MCP (BM25 + graph proximity; no embeddings).
+
+pub mod bm25;
+pub mod semantic;
+pub mod tokenize;
 
 use crate::config::codeindex_dir;
 use crate::graph::path::{format_path_hops, hotspots as graph_hotspots, shortest_path};
 use crate::graph::{persistence as graph_persistence, DependencyGraph};
 use crate::graph::bfs::score_files;
 use crate::indexer::writer::{read_index, read_package};
+use crate::query::bm25::{DocKind, SearchIndex};
 use crate::types::{PackageDetail, RepoIndex, SymbolEntry};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -16,6 +21,7 @@ pub struct RepoQueryCtx {
     pub index: RepoIndex,
     pub graph: DependencyGraph,
     pub packages: HashMap<String, PackageDetail>,
+    pub search: SearchIndex,
 }
 
 impl RepoQueryCtx {
@@ -33,30 +39,16 @@ impl RepoQueryCtx {
             }
         }
 
+        let search = SearchIndex::load(&codeindex)
+            .unwrap_or_else(|| SearchIndex::build(&index, &packages));
+
         Ok(Self {
             root: root.to_path_buf(),
             index,
             graph,
             packages,
+            search,
         })
-    }
-
-    fn tokenize(question: &str) -> Vec<String> {
-        question
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '/')
-            .filter(|t| t.len() >= 2)
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn term_overlap(haystack: &str, terms: &[String]) -> f32 {
-        if terms.is_empty() {
-            return 0.0;
-        }
-        let h = haystack.to_lowercase();
-        let hits = terms.iter().filter(|t| h.contains(t.as_str())).count();
-        hits as f32 / terms.len() as f32
     }
 
     /// Ranked search over packages, symbols, and files.
@@ -71,68 +63,39 @@ impl RepoQueryCtx {
         limit: usize,
         active_files: Option<&[PathBuf]>,
     ) -> Vec<QueryMatch> {
-        let terms = Self::tokenize(question);
         let bfs_scores = match active_files {
             Some(files) if !files.is_empty() => score_files(&self.graph, files),
             _ => score_files(&self.graph, &[]),
         };
+
+        let scored = self.search.score_query(question);
         let mut matches: Vec<QueryMatch> = Vec::new();
 
-        for pkg in &self.index.packages {
-            let pkg_score = Self::term_overlap(&pkg.name, &terms)
-                + Self::term_overlap(&pkg.purpose, &terms);
-            if pkg_score > 0.0 {
-                matches.push(QueryMatch {
-                    kind: MatchKind::Package,
-                    name: pkg.name.clone(),
-                    detail: format!("{} files, score {:.2}", pkg.files, pkg.score),
-                    score: pkg_score + pkg.score * 0.1,
-                    hint: format!("drill_package name={}", pkg.name),
-                });
-            }
-        }
+        for (doc_idx, bm25_score) in scored {
+            let doc = &self.search.docs[doc_idx];
+            let prox = doc
+                .path
+                .as_ref()
+                .map(|p| {
+                    let pb = PathBuf::from(p);
+                    bfs_scores.get(&pb).copied().unwrap_or(0.1)
+                })
+                .unwrap_or(0.1);
 
-        for (pkg_name, pkg) in &self.packages {
-            for file in &pkg.files {
-                let path_str = file.path.to_string_lossy().into_owned();
-                let file_score = Self::term_overlap(&path_str, &terms);
-                let prox = bfs_scores.get(&file.path).copied().unwrap_or(0.1);
-                if file_score > 0.0 {
-                    matches.push(QueryMatch {
-                        kind: MatchKind::File,
-                        name: path_str.clone(),
-                        detail: format!("package {pkg_name}"),
-                        score: file_score + prox * 0.2,
-                        hint: format!("explain {path_str}"),
-                    });
-                }
-                for sym in &file.symbols {
-                    let sym_score = Self::term_overlap(&sym.name, &terms)
-                        + Self::term_overlap(&sym.signature, &terms);
-                    if sym_score > 0.0 {
-                        matches.push(QueryMatch {
-                            kind: MatchKind::Symbol,
-                            name: sym.name.clone(),
-                            detail: format!("{path_str}:{} — {}", sym.line, sym.signature),
-                            score: sym_score + prox * 0.3,
-                            hint: format!("find_definition symbol={}", sym.name),
-                        });
-                    }
-                }
-            }
-        }
+            let (kind, prox_w, bonus) = match doc.kind {
+                DocKind::Package => (MatchKind::Package, 0.1, 0.0),
+                DocKind::File => (MatchKind::File, 0.2, 0.0),
+                DocKind::Symbol => (MatchKind::Symbol, 0.3, 0.0),
+                DocKind::HotSymbol => (MatchKind::HotSymbol, 0.0, 0.15),
+            };
 
-        for sym in &self.index.hot_symbols {
-            let s = Self::term_overlap(sym, &terms);
-            if s > 0.0 {
-                matches.push(QueryMatch {
-                    kind: MatchKind::HotSymbol,
-                    name: sym.clone(),
-                    detail: "hot symbol".into(),
-                    score: s + 0.15,
-                    hint: format!("find_definition symbol={sym}"),
-                });
-            }
+            matches.push(QueryMatch {
+                kind,
+                name: doc.name.clone(),
+                detail: doc.detail.clone(),
+                score: bm25_score + prox * prox_w + bonus,
+                hint: doc.hint.clone(),
+            });
         }
 
         matches.sort_by(|a, b| {
@@ -416,6 +379,17 @@ mod tests {
         let matches = ctx.query("auth", 10);
         assert!(!matches.is_empty());
         assert!(matches.iter().any(|m| m.name.contains("auth") || m.name == "login"));
+    }
+
+    #[test]
+    fn query_login_finds_symbol_via_bm25() {
+        let ctx = load_fixture();
+        let matches = ctx.query("login", 10);
+        assert!(
+            matches.iter().any(|m| m.name == "login" || m.name.contains("auth")),
+            "expected login/auth match, got {:?}",
+            matches.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]

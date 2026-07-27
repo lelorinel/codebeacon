@@ -54,6 +54,30 @@ ttl_secs = 600
 [docs]
 path = "docs"                  # or: codebeacon init/serve --docs ./docs
 
+[architecture]
+enabled = false
+layers = ["domain", "app", "infra", "api"]
+# [[architecture.map]]
+# layer = "domain"
+# packages = ["src/domain/**"]
+# [[architecture.deny]]
+# from = "domain"
+# to = ["infra", "api"]
+
+[risk]
+enabled = true
+# w_dependents = 0.15
+# w_fan_in = 0.2
+# w_churn = 0.1
+# w_bugfix = 0.25
+# w_complexity = 0.05
+# w_test_gap = 0.2
+# bias = -2.0
+
+[deps]
+enabled = true
+check_registry = false         # true → probe crates.io (network)
+
 [security]
 enabled = false            # or: codebeacon serve --security
 mode = "balanced"          # strict | balanced | permissive
@@ -103,6 +127,30 @@ Per-call override: pass `"compact": false` on any MCP tool. See [BENCHMARKS.md](
 | `change_impact_high_ref_threshold` | `10` | Reference count above which `change_impact` reports `risk: high` |
 | `conventions_enabled` | `true` | Write `.codeindex/conventions.json` on index rebuild |
 | `git_context_enabled` | `true` | Git subprocess helpers for `why_file` and `index_status` |
+| `call_graph` | `true` | Build `.codeindex/calls.bin` on index and enable call-aware impact |
+
+## `[architecture]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | When true, `arch_check` enforces layer rules |
+| `layers` | `[]` | Named layers |
+| `map` | `[]` | `{ layer, packages[] }` path/package globs |
+| `allow` / `deny` | `[]` | `{ from, to[] }` edge rules |
+
+## `[risk]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | Logistic risk for `predict_risk` / scored `fragile_files` |
+| `w_*` / `bias` | see example | Feature weights for σ(w·x + b) |
+
+## `[deps]`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | Scan Cargo.toml / package.json / go.mod |
+| `check_registry` | `false` | When true, probe crates.io for latest versions |
 
 ## `[loop]`
 

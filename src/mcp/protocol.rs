@@ -408,11 +408,117 @@ pub fn tool_list(
             }),
             serde_json::json!({
                 "name": "fragile_files",
-                "description": "High-churn files with many dependents (hotspots × git churn).",
+                "description": "High-churn files with many dependents (hotspots × git churn / risk score).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "limit": { "type": "integer", "description": "Max results (default 10)" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "call_graph",
+                "description": "Function-level callers/callees from the call graph.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string" },
+                        "file": { "type": "string" },
+                        "direction": { "type": "string", "description": "callers | callees | both (default both)" },
+                        "depth": { "type": "integer", "description": "Walk depth (default 2)" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["symbol"]
+                }
+            }),
+            serde_json::json!({
+                "name": "review_bundle",
+                "description": "Diff-aware review context for a PR, commit, or base...HEAD range.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pr": { "type": "integer", "description": "GitHub PR number (uses gh)" },
+                        "base": { "type": "string", "description": "git diff base (default HEAD working tree)" },
+                        "commit": { "type": "string" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "arch_check",
+                "description": "Check import edges against [architecture] layer allow/deny rules.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "navigate_to_feature",
+                "description": "NL → ranked files/symbols/docs read order (BM25 + graph + docs).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string" },
+                        "limit": { "type": "integer" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": ["question"]
+                }
+            }),
+            serde_json::json!({
+                "name": "test_gaps",
+                "description": "Find production functions without a matching test.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "package": { "type": "string" },
+                        "file": { "type": "string" },
+                        "limit": { "type": "integer" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "predict_risk",
+                "description": "Logistic risk score for a file or symbol (churn, fan-in, test gaps, etc.).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string" },
+                        "symbol": { "type": "string" },
+                        "limit": { "type": "integer" },
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "dep_freshness",
+                "description": "Scan Cargo.toml / package.json / go.mod for dependency drift.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": { "type": "string" }
+                    },
+                    "required": []
+                }
+            }),
+            serde_json::json!({
+                "name": "semantic_search",
+                "description": "Semantic-ish search (embeddings feature or BM25 fallback).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string" },
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer" },
                         "repo": { "type": "string" }
                     },
                     "required": []

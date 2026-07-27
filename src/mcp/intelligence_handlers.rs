@@ -4,10 +4,13 @@ use crate::compact::{
     compact_mode, encode_change_impact, encode_focus_response, encode_task_context,
 };
 use crate::intelligence::{
-    api_surface, change_impact, focus_context, fragile_files, index_status,
-    package_conventions, read_conventions, resolve_rel_path, similar_symbols, task_context,
+    api_surface, arch_check, call_graph, change_impact, focus_context, fragile_files,
+    fragile_files_scored, index_status, navigate_to_feature, package_conventions, predict_risk,
+    read_conventions, resolve_rel_path, review_bundle, similar_symbols, task_context, test_gaps,
     why_file,
 };
+use crate::deps::dep_freshness;
+use crate::query::semantic::semantic_search;
 use crate::intelligence::git::{git_blame_first_line, git_log_file};
 use crate::mcp::protocol::text_content;
 use crate::mcp::tools::{RepoCtx, ToolContext};
@@ -225,12 +228,142 @@ pub fn handle_fragile_files(ctx: &ToolContext, args: &Value) -> Result<Value> {
 
     for repo in repos {
         let qctx = repo_query(repo)?;
-        let out = fragile_files(
-            &qctx,
-            limit,
-            repo.intelligence.git_context_enabled,
-        );
+        let cfg = crate::config_file::load(&repo.root).unwrap_or_default();
+        let out = if cfg.risk.enabled {
+            fragile_files_scored(
+                &qctx,
+                &cfg.risk,
+                limit,
+                repo.intelligence.git_context_enabled,
+            )
+        } else {
+            fragile_files(
+                &qctx,
+                limit,
+                repo.intelligence.git_context_enabled,
+            )
+        };
         return json_response(&out);
     }
     anyhow::bail!("no indexed repo for fragile_files")
+}
+
+pub fn handle_call_graph(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let symbol = args["symbol"].as_str().context("missing 'symbol'")?;
+    let file = args["file"].as_str();
+    let direction = args["direction"].as_str().unwrap_or("both");
+    let depth = args["depth"].as_u64().unwrap_or(2) as u32;
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let file_rel = file.map(|f| {
+            let abs = repo.resolve_file(f);
+            resolve_rel_path(&repo.root, &abs)
+        });
+        let out = call_graph(&qctx, symbol, file_rel.as_deref(), direction, depth);
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for call_graph")
+}
+
+pub fn handle_review_bundle(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let pr = args["pr"].as_u64();
+    let base = args["base"].as_str();
+    let commit = args["commit"].as_str();
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let out = review_bundle(&qctx, &repo.intelligence, base, pr, commit)?;
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for review_bundle")
+}
+
+pub fn handle_arch_check(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let cfg = crate::config_file::load(&repo.root).unwrap_or_default();
+        let out = arch_check(&qctx, &cfg.architecture);
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for arch_check")
+}
+
+pub fn handle_navigate_to_feature(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let question = args["question"].as_str().context("missing 'question'")?;
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let out = navigate_to_feature(&qctx, question, limit);
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for navigate_to_feature")
+}
+
+pub fn handle_test_gaps(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let package = args["package"].as_str();
+    let file = args["file"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let file_rel = file.map(|f| {
+            let abs = repo.resolve_file(f);
+            resolve_rel_path(&repo.root, &abs)
+        });
+        let out = test_gaps(&qctx, package, file_rel.as_deref(), limit);
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for test_gaps")
+}
+
+pub fn handle_predict_risk(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let file = args["file"].as_str();
+    let symbol = args["symbol"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let cfg = crate::config_file::load(&repo.root).unwrap_or_default();
+        let file_rel = file.map(|f| {
+            let abs = repo.resolve_file(f);
+            resolve_rel_path(&repo.root, &abs)
+        });
+        let out = predict_risk(
+            &qctx,
+            &cfg.risk,
+            file_rel.as_deref(),
+            symbol,
+            limit,
+        );
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for predict_risk")
+}
+
+pub fn handle_dep_freshness(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let cfg = crate::config_file::load(&repo.root).unwrap_or_default();
+        let out = dep_freshness(&repo.root, &cfg.deps);
+        return json_response(&out);
+    }
+    anyhow::bail!("no repo for dep_freshness")
+}
+
+pub fn handle_semantic_search(ctx: &ToolContext, args: &Value) -> Result<Value> {
+    let question = args["question"]
+        .as_str()
+        .or_else(|| args["query"].as_str())
+        .context("missing 'question'")?;
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    let repo_filter = args["repo"].as_str();
+    for repo in ctx.repos_for(repo_filter) {
+        let qctx = repo_query(repo)?;
+        let out = semantic_search(&qctx, question, limit);
+        return json_response(&out);
+    }
+    anyhow::bail!("no indexed repo for semantic_search")
 }

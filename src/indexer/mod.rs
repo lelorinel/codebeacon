@@ -197,12 +197,13 @@ impl Indexer {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "repo".into());
 
-        Self::write_index_artifacts(&codeindex, &packages, summaries, repo_name)?;
+        Self::write_index_artifacts(&codeindex, &self.repo_root, &packages, summaries, repo_name)?;
         Ok(())
     }
 
     fn write_index_artifacts(
         codeindex: &Path,
+        repo_root: &Path,
         packages: &[PackageDetail],
         summaries: Vec<PackageSummary>,
         repo_name: String,
@@ -227,6 +228,14 @@ impl Indexer {
         for pkg in packages {
             write_package(pkg, codeindex)?;
         }
+        crate::query::bm25::write_search_index(codeindex, &index, packages)?;
+        Self::write_call_graph(repo_root, codeindex, packages)?;
+        Ok(())
+    }
+
+    fn write_call_graph(repo_root: &Path, codeindex: &Path, packages: &[PackageDetail]) -> Result<()> {
+        let store = crate::graph::calls::build_call_store(repo_root, packages);
+        crate::graph::calls::save_calls(&store, codeindex)?;
         Ok(())
     }
 
@@ -373,7 +382,7 @@ impl Indexer {
         let repo_name = self.repo_root.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "repo".into());
-        Self::write_index_artifacts(&codeindex, &packages, summaries, repo_name)
+        Self::write_index_artifacts(&codeindex, &self.repo_root, &packages, summaries, repo_name)
     }
 
     pub fn save_graph(&self) -> Result<()> {

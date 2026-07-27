@@ -75,15 +75,23 @@ Recommended workflow before editing: `index_status` → `focus_context` → `cha
 |------|-------------|
 | `index_status` | Check index freshness vs working tree |
 | `focus_context` | Subgraph around the file you are editing |
-| `task_context` | Task keywords + package drill (`query_context` + proximity) |
-| `change_impact` | Blast radius before renaming/changing a symbol |
+| `task_context` | Task keywords + package drill (`query_context` + proximity; BM25) |
+| `change_impact` | Blast radius before renaming/changing a symbol (includes call fan-in) |
+| `call_graph` | Function-level callers/callees |
+| `review_bundle` | Diff-aware PR/commit/base review context |
+| `arch_check` | Layer/package boundary violations (`[architecture]`) |
+| `navigate_to_feature` | NL → ranked files/symbols/docs read order |
+| `test_gaps` | Prod functions without a matching test |
+| `predict_risk` | Logistic risk score (churn, fan-in, bug-fix, test gaps) |
+| `dep_freshness` | Cargo/npm/go.mod dependency drift |
+| `semantic_search` | Embeddings feature or BM25 fallback |
 | `package_conventions` | How this package writes code (error style, logging, async) |
 | `similar_symbols` | Lightweight symbol similarity |
 | `api_surface` | Public exports for a package |
 | `why_file` | Recent git commits + dependency context |
-| `fragile_files` | High-churn files with many dependents |
+| `fragile_files` | High-risk files (scored when `[risk]` enabled) |
 
-CLI: `codebeacon focus`, `status`, `impact`, `api`, `why`. Disable via `[intelligence] enabled = false` in `.codeindex.toml`.
+CLI: `codebeacon focus`, `status`, `impact`, `api`, `why`, `review`, `arch-check`, `navigate`, `test-gaps`, `predict-risk`, `dep-freshness`, `call-graph`. Disable via `[intelligence] enabled = false` in `.codeindex.toml`.
 
 ## Loop context (v0.5+)
 

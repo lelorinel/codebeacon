@@ -20,8 +20,11 @@ Demo: [`worked/simple-rust/`](worked/simple-rust/) · Install: [INSTALL.md](docs
 
 - **Small map** — L0 index ~350–500 tokens; fits large repos without overflow
 - **Smart ordering** — packages near your open files rank first (BFS on the import graph)
+- **BM25 search** — camelCase/stem tokenization so `auth` finds `authentication` / `user_login`
+- **Call graph** — function-level callers/callees; richer `change_impact`
 - **Graph queries** — `query`, `path`, `dependents` via CLI or MCP
 - **Docs sidecar** — optional markdown index (`--docs`) with heading search and stale tracking
+- **Review / risk / arch** — PR diff bundles, logistic risk scores, layer boundary checks, test gaps, dep freshness
 - **Multi-agent TUI** — `run-plan` / `multi-agent` with Gallery or Conductor modes
 
 **grep loop:** search → read file → search again → …  
@@ -33,7 +36,7 @@ Demo: [`worked/simple-rust/`](worked/simple-rust/) · Install: [INSTALL.md](docs
 
 ![Architecture](docs/images/architecture.png)
 
-File changes are parsed (regex by default; optional tree-sitter), imports are resolved into a dependency graph, and a hierarchical `.codeindex/` is written. The MCP server exposes that map on demand — load `index.json` first, drill into packages only when you need detail. LSP is optional and only used for `find_definition` / `find_references`.
+File changes are parsed (regex by default; optional tree-sitter), imports are resolved into a dependency graph, call sites feed a separate call graph, and a hierarchical `.codeindex/` is written (including BM25 search stats). The MCP server exposes that map on demand — load `index.json` first, drill into packages only when you need detail. LSP is optional and only used for `find_definition` / `find_references`.
 
 ---
 
@@ -50,11 +53,15 @@ Rust, Go, Python, TypeScript/JavaScript, C# — regex extraction needs no LSP bi
 | `get_context` | Start of every task |
 | `drill_package` | Full file and symbol list for one package |
 | `find_definition` / `find_references` | Track a symbol |
-| `query_context` | Keyword search across packages/files |
+| `query_context` | BM25 search across packages/files/symbols |
+| `navigate_to_feature` | NL → ranked files, read order, related docs |
 | `get_dependents` | "What breaks if I change this file?" |
+| `call_graph` | Function-level callers / callees |
 | `index_status` | Is the index stale? Call before editing |
 | `focus_context` | Narrow subgraph around the file you are editing |
-| `change_impact` | Blast radius before changing a symbol |
+| `change_impact` | Blast radius before changing a symbol (files + callers) |
+| `review_bundle` | Diff-aware PR / commit review context |
+| `arch_check` / `test_gaps` / `predict_risk` / `dep_freshness` | Architecture, tests, risk, dependency drift |
 | `query_docs` / `resolve_doc` | Documentation context (when `--docs` / `[docs] path` set) |
 
 ### Docs sidecar
@@ -101,8 +108,16 @@ codebeacon init --docs ./docs                # + markdown docs sidecar
 codebeacon install --platform cursor --project   # editor + MCP; prompts init if missing
 codebeacon serve                             # MCP server (add --fs-tools, --security, --docs)
 codebeacon docs query "auth"                 # search indexed docs
-codebeacon query "auth"                      # search code index
+codebeacon query "auth"                      # BM25 search code index
+codebeacon navigate "user login flow"        # NL → files / symbols / docs
 codebeacon focus src/auth.rs                 # edit-time subgraph
+codebeacon impact login                      # symbol blast radius (+ call fan-in)
+codebeacon call-graph find_user              # callers / callees
+codebeacon review --base main                # diff-aware review bundle
+codebeacon arch-check                        # layer boundary violations
+codebeacon test-gaps                         # untested functions
+codebeacon predict-risk --file src/auth.rs   # logistic risk score
+codebeacon dep-freshness                     # Cargo / npm / go.mod drift
 codebeacon loop begin "fix login" --file src/auth.rs
 codebeacon run-plan ./plans "implement these"          # TUI multi-agent + path locks
 codebeacon run-plan ./plans "…" --provider claude       # Claude Code CLI
@@ -111,7 +126,6 @@ codebeacon run-plan ./plans "…" --headless              # CI / no TUI
 codebeacon multi-agent                                 # Gallery / Conductor picker
 codebeacon multi-agent --mode conductor                # spawn via MCP
 codebeacon status                                      # index freshness
-codebeacon impact login                                # symbol blast radius
 codebeacon path src/auth.rs src/db.rs                  # shortest dependency chain
 codebeacon report                                      # CODEBEACON_REPORT.md
 ```
@@ -134,11 +148,26 @@ Install for your editor: `codebeacon install --list` — see [INSTALL.md](docs/I
 [compact]
 enabled = true
 
+[intelligence]
+enabled = true
+call_graph = true
+
+[risk]
+enabled = true
+
+[deps]
+enabled = true
+check_registry = false
+
+# [architecture]
+# enabled = true
+# layers = ["domain", "app", "infra"]
+
 [security]
 enabled = false
 ```
 
-Full schema: [CONFIG.md](docs/CONFIG.md).
+Full schema: [CONFIG.md](docs/CONFIG.md). Optional build: `cargo build --features embeddings` for n-gram `semantic_search`.
 
 ---
 
@@ -148,7 +177,9 @@ Full schema: [CONFIG.md](docs/CONFIG.md).
 .codeindex/
   index.json        ← Level 0 (~350–500 tokens)
   packages/         ← Level 1 detail (on demand)
-  graph.bin         ← dependency graph (daemon)
+  graph.bin         ← file import graph (daemon)
+  search.bin        ← BM25 stats
+  calls.bin         ← function call graph
   dict.json         ← path refs for compact mode
   docs.json         ← markdown docs sidecar (when --docs / [docs] path)
   locks/            ← multi-agent path claims (apply-locks.json)

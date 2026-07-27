@@ -1,6 +1,7 @@
 use crate::config_file::IntelligenceConfig;
 use crate::graph::path::hotspots as graph_hotspots;
 use crate::graph::DependencyGraph;
+use crate::intelligence::callgraph::{affected_functions, call_fan_in, CallRef};
 use crate::query::RepoQueryCtx;
 use crate::types::PackageDetail;
 use anyhow::Result;
@@ -22,6 +23,8 @@ pub struct ChangeImpactResponse {
     pub references: Vec<SymbolRef>,
     pub ref_count: usize,
     pub dependent_files: Vec<String>,
+    pub affected_functions: Vec<CallRef>,
+    pub call_fan_in: usize,
     pub risk: String,
 }
 
@@ -69,7 +72,6 @@ pub fn change_impact(
         }
     }
 
-    // Index fallback: name match for references when exact symbol search
     if exact {
         for pkg in &packages {
             for file in &pkg.files {
@@ -82,7 +84,8 @@ pub fn change_impact(
                 for sym in &file.symbols {
                     if sym.name == symbol {
                         let path_str = file.path.to_string_lossy().into_owned();
-                        let is_def = definitions.iter().any(|d| d.file == path_str && d.line == sym.line);
+                        let is_def =
+                            definitions.iter().any(|d| d.file == path_str && d.line == sym.line);
                         if !is_def {
                             references.push(SymbolRef {
                                 file: path_str,
@@ -104,11 +107,15 @@ pub fn change_impact(
         .map(|d| dependent_files_for(&ctx.graph, &PathBuf::from(&d.file)))
         .unwrap_or_default();
 
+    let affected = affected_functions(ctx, symbol, 2);
+    let fan_in = call_fan_in(ctx, symbol);
+
     let risk = assess_risk(
         ref_count,
         &dependent_files,
         &ctx.graph,
         cfg.change_impact_high_ref_threshold,
+        fan_in,
     );
 
     Ok(ChangeImpactResponse {
@@ -117,6 +124,8 @@ pub fn change_impact(
         references,
         ref_count,
         dependent_files,
+        affected_functions: affected,
+        call_fan_in: fan_in,
         risk,
     })
 }
@@ -144,8 +153,9 @@ fn assess_risk(
     dependent_files: &[String],
     graph: &DependencyGraph,
     threshold: u32,
+    call_fan_in: usize,
 ) -> String {
-    if ref_count as u32 > threshold {
+    if ref_count as u32 > threshold || call_fan_in > threshold as usize {
         return "high".into();
     }
     let hs: HashSet<String> = graph_hotspots(graph, 10)
@@ -155,7 +165,7 @@ fn assess_risk(
     if dependent_files.iter().any(|f| hs.contains(f)) {
         return "high".into();
     }
-    if ref_count > 3 || !dependent_files.is_empty() {
+    if ref_count > 3 || call_fan_in > 3 || !dependent_files.is_empty() {
         "medium".into()
     } else {
         "low".into()
@@ -171,19 +181,19 @@ mod tests {
     #[test]
     fn risk_high_when_refs_exceed_threshold() {
         let g = DependencyGraph::new();
-        assert_eq!(assess_risk(11, &[], &g, 10), "high");
+        assert_eq!(assess_risk(11, &[], &g, 10, 0), "high");
     }
 
     #[test]
     fn risk_low_when_no_refs_or_dependents() {
         let g = DependencyGraph::new();
-        assert_eq!(assess_risk(0, &[], &g, 10), "low");
+        assert_eq!(assess_risk(0, &[], &g, 10, 0), "low");
     }
 
     #[test]
     fn risk_medium_with_many_refs() {
         let g = DependencyGraph::new();
-        assert_eq!(assess_risk(4, &[], &g, 10), "medium");
+        assert_eq!(assess_risk(4, &[], &g, 10, 0), "medium");
     }
 
     #[test]
@@ -191,6 +201,12 @@ mod tests {
         let mut g = DependencyGraph::new();
         g.add_dependency(&PathBuf::from("a.rs"), &PathBuf::from("b.rs"));
         let deps = vec!["b.rs".into()];
-        assert_eq!(assess_risk(1, &deps, &g, 10), "high");
+        assert_eq!(assess_risk(1, &deps, &g, 10, 0), "high");
+    }
+
+    #[test]
+    fn risk_high_with_call_fan_in() {
+        let g = DependencyGraph::new();
+        assert_eq!(assess_risk(0, &[], &g, 10, 11), "high");
     }
 }

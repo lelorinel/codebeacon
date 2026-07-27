@@ -16,6 +16,18 @@
 
 - [x] Loop Context Coordinator — `loop_begin` / `loop_tick` / `loop_record` / `loop_end`, CLI `loop watch`, [LOOP.md](LOOP.md)
 
+## v0.8 — Intelligence upgrades
+
+- [x] BM25 + camelCase/stem tokenization (`.codeindex/search.bin`)
+- [x] Call graph (`calls.bin`, MCP `call_graph`, enriched `change_impact`)
+- [x] Diff-aware review (`review` CLI / `review_bundle`)
+- [x] Architecture layer checks (`[architecture]`, `arch_check`)
+- [x] NL navigation (`navigate_to_feature`)
+- [x] Test gap analysis (`test_gaps`)
+- [x] Logistic risk scoring (`predict_risk`, scored `fragile_files`)
+- [x] Dependency freshness (`dep_freshness`)
+- [x] Optional `embeddings` feature → `semantic_search` (char n-gram; BM25 fallback without feature)
+
 ## v0.3 — Planned
 
 - [ ] `codebeacon serve --http` — team MCP endpoint
@@ -32,6 +44,7 @@
 | PDF / video / image indexing | Code-only focus |
 | Neo4j / FalkorDB | petgraph is sufficient |
 | 30 README translations | — |
+| Heavy ML embeddings (candle/ORT) | Use `embeddings` n-gram feature or BM25 for now |
 
 ## Language expansion
 

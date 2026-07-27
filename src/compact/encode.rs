@@ -201,12 +201,19 @@ pub fn encode_change_impact(
             g: r.signature.clone(),
         })
         .collect();
+    let af = impact
+        .affected_functions
+        .iter()
+        .map(|c| format!("{}::{}", session.path_id(&c.file), c.symbol))
+        .collect();
     CompactChangeImpact {
         sym: impact.symbol.clone(),
         def,
         rf,
         rc: impact.ref_count,
         df: impact.dependent_files.clone(),
+        af,
+        fi: impact.call_fan_in,
         risk: impact.risk.clone(),
     }
 }

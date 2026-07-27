@@ -4,6 +4,7 @@ mod compact;
 mod config;
 mod config_file;
 mod daemon;
+mod deps;
 mod docs;
 mod export;
 mod extract;
@@ -204,6 +205,69 @@ enum Commands {
     /// Git history and dependency context for a file
     Why {
         file: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Diff-aware review bundle (PR / base / commit)
+    Review {
+        #[arg(long)]
+        pr: Option<u64>,
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        commit: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Architecture layer boundary check
+    ArchCheck {
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// NL → feature navigation
+    Navigate {
+        question: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Test coverage gaps by naming heuristics
+    TestGaps {
+        #[arg(long)]
+        package: Option<String>,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Logistic risk prediction
+    PredictRisk {
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        symbol: Option<String>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Dependency freshness (Cargo / npm / go.mod)
+    DepFreshness {
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Call graph callers/callees
+    CallGraph {
+        symbol: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long, default_value = "both")]
+        direction: String,
+        #[arg(long, default_value_t = 2)]
+        depth: u32,
         #[arg(long)]
         root: Option<PathBuf>,
     },
@@ -619,6 +683,88 @@ async fn main() -> Result<()> {
                 (vec![], None)
             };
             let out = intelligence::why_file(&qctx, &rel, recent_commits, blame_first_line);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::Review {
+            pr,
+            base,
+            commit,
+            root,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo).unwrap_or_default();
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let out = intelligence::review_bundle(
+                &qctx,
+                &cfg.intelligence,
+                base.as_deref(),
+                pr,
+                commit.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::ArchCheck { root } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo).unwrap_or_default();
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let out = intelligence::arch_check(&qctx, &cfg.architecture);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::Navigate {
+            question,
+            root,
+            limit,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let out = intelligence::navigate_to_feature(&qctx, &question, limit);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::TestGaps {
+            package,
+            file,
+            root,
+            limit,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let out = intelligence::test_gaps(&qctx, package.as_deref(), file.as_deref(), limit);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::PredictRisk {
+            file,
+            symbol,
+            root,
+            limit,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo).unwrap_or_default();
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let out = intelligence::predict_risk(
+                &qctx,
+                &cfg.risk,
+                file.as_deref(),
+                symbol.as_deref(),
+                limit,
+            );
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::DepFreshness { root } => {
+            let repo = resolve_single_root(root)?;
+            let cfg = config_file::load(&repo).unwrap_or_default();
+            let out = deps::dep_freshness(&repo, &cfg.deps);
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
+        Commands::CallGraph {
+            symbol,
+            file,
+            direction,
+            depth,
+            root,
+        } => {
+            let repo = resolve_single_root(root)?;
+            let qctx = query::RepoQueryCtx::load(&repo)?;
+            let out = intelligence::call_graph(&qctx, &symbol, file.as_deref(), &direction, depth);
             println!("{}", serde_json::to_string_pretty(&out)?);
         }
         Commands::Loop { command } => run_loop_command(command)?,

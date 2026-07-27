@@ -101,7 +101,15 @@ pub struct CompactChangeImpact {
     pub rc: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub df: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub af: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub fi: usize,
     pub risk: String,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

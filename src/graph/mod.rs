@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub mod bfs;
+pub mod calls;
 pub mod path;
 pub mod persistence;
 
