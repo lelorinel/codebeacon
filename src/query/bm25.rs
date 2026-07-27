@@ -188,8 +188,9 @@ fn doc_from_text(
     }
     // Also index unstemmed short prefixes for soft match
     for t in tokenize(text) {
-        if t.len() >= 3 {
-            let prefix = light_stem(&t[..t.len().min(4)]);
+        if t.chars().count() >= 3 {
+            let prefix: String = t.chars().take(4.min(t.chars().count())).collect();
+            let prefix = light_stem(&prefix);
             term_tf.entry(prefix).or_insert(0);
         }
     }

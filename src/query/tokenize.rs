@@ -16,8 +16,9 @@ pub fn tokenize(text: &str) -> Vec<String> {
             }
             let stemmed = light_stem(&lower);
             // Short prefixes help "auth" match "authentication" / "authenticate".
-            if stemmed.len() >= 4 {
-                out.push(stemmed[..4].to_string());
+            // Use char counts — byte slices panic on multi-byte UTF-8 (e.g. Turkish ç).
+            if stemmed.chars().count() >= 4 {
+                out.push(stemmed.chars().take(4).collect());
             }
             out.push(stemmed);
         }
@@ -78,7 +79,8 @@ fn is_stopword(t: &str) -> bool {
 /// Very light English stemmer (suffix stripping) — enough for auth/authentication.
 pub fn light_stem(word: &str) -> String {
     let w = word;
-    if w.len() <= 3 {
+    let char_len = w.chars().count();
+    if char_len <= 3 {
         return w.to_string();
     }
     let suffixes = [
@@ -87,10 +89,15 @@ pub fn light_stem(word: &str) -> String {
         "ous", "al", "er", "est", "ly", "ed",
     ];
     for suf in suffixes {
-        if w.len() > suf.len() + 2 && w.ends_with(suf) {
-            let stem = &w[..w.len() - suf.len()];
-            if stem.len() >= 2 {
-                return stem.to_string();
+        let suf_chars = suf.chars().count();
+        if char_len > suf_chars + 2 && w.ends_with(suf) {
+            // Suffixes are ASCII; strip by bytes only when the cut is a char boundary.
+            let cut = w.len().saturating_sub(suf.len());
+            if w.is_char_boundary(cut) {
+                let stem = &w[..cut];
+                if stem.chars().count() >= 2 {
+                    return stem.to_string();
+                }
             }
         }
     }
@@ -120,5 +127,12 @@ mod tests {
         let q = tokenize("login");
         let doc = tokenize("user_login");
         assert!(q.iter().any(|t| doc.contains(t)));
+    }
+
+    #[test]
+    fn turkish_chars_do_not_panic() {
+        let tokens = tokenize("açıklama ölçüm içerik");
+        assert!(!tokens.is_empty());
+        let _ = tokenize("çğüşöıÇĞÜŞÖİ");
     }
 }

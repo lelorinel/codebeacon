@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-27
+
+### Fixed
+
+- **Tokenize panic on non-ASCII** — prefix/stem slicing now uses Unicode char boundaries (e.g. Turkish `ç`), instead of raw byte indexes that could panic mid-character.
+
 ## [0.8.0] - 2026-07-27
 
 ### Added
